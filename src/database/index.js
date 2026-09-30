@@ -162,6 +162,22 @@ function createDatabase(databasePath) {
       updated_at TEXT NOT NULL,
       PRIMARY KEY (guild_id, shortcut)
     );
+    CREATE TABLE IF NOT EXISTS role_locks (
+      guild_id TEXT NOT NULL,
+      locked_role_id TEXT NOT NULL,
+      updated_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, locked_role_id)
+    );
+    CREATE TABLE IF NOT EXISTS role_lock_authorizations (
+      guild_id TEXT NOT NULL,
+      locked_role_id TEXT NOT NULL,
+      authorization_role_id TEXT NOT NULL,
+      PRIMARY KEY (guild_id, locked_role_id, authorization_role_id),
+      FOREIGN KEY (guild_id, locked_role_id)
+        REFERENCES role_locks (guild_id, locked_role_id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS forced_role_strips_target
       ON forced_role_strips (guild_id, user_id);
     CREATE INDEX IF NOT EXISTS forever_bans_user
@@ -304,12 +320,55 @@ function createDatabase(databasePath) {
         updated_at = excluded.updated_at
     `),
     removeCommandAlias: connection.prepare('DELETE FROM command_aliases WHERE guild_id = ? AND shortcut = ?'),
+    getRoleLock: connection.prepare(`
+      SELECT authorization_role_id
+      FROM role_lock_authorizations
+      WHERE guild_id = ? AND locked_role_id = ?
+      ORDER BY rowid
+    `),
+    getRoleLocks: connection.prepare(`
+      SELECT locks.locked_role_id, authorizations.authorization_role_id
+      FROM role_locks AS locks
+      JOIN role_lock_authorizations AS authorizations
+        ON authorizations.guild_id = locks.guild_id
+        AND authorizations.locked_role_id = locks.locked_role_id
+      WHERE locks.guild_id = ?
+      ORDER BY locks.created_at, locks.locked_role_id, authorizations.rowid
+    `),
+    upsertRoleLock: connection.prepare(`
+      INSERT INTO role_locks (guild_id, locked_role_id, updated_by, created_at, updated_at)
+      VALUES (@guild_id, @locked_role_id, @updated_by, @created_at, @updated_at)
+      ON CONFLICT(guild_id, locked_role_id) DO UPDATE SET
+        updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at
+    `),
+    clearRoleLockAuthorizations: connection.prepare(
+      'DELETE FROM role_lock_authorizations WHERE guild_id = ? AND locked_role_id = ?'
+    ),
+    addRoleLockAuthorization: connection.prepare(`
+      INSERT INTO role_lock_authorizations (guild_id, locked_role_id, authorization_role_id)
+      VALUES (?, ?, ?)
+    `),
+    removeRoleLock: connection.prepare('DELETE FROM role_locks WHERE guild_id = ? AND locked_role_id = ?'),
     addForceManagementLog: connection.prepare(`
       INSERT INTO force_management_logs
         (guild_id, action, target_user_id, role_id, nickname, executor_id, result, reason, punishment, failure_reason, attribution_status, created_at)
       VALUES (@guild_id, @action, @target_user_id, @role_id, @nickname, @executor_id, @result, @reason, @punishment, @failure_reason, @attribution_status, @created_at)
     `)
   };
+  const setRoleLockTransaction = connection.transaction((guildId, lockedRoleId, authorizationRoleIds, updatedBy, now) => {
+    statements.upsertRoleLock.run({
+      guild_id: guildId,
+      locked_role_id: lockedRoleId,
+      updated_by: updatedBy,
+      created_at: now,
+      updated_at: now
+    });
+    statements.clearRoleLockAuthorizations.run(guildId, lockedRoleId);
+    for (const authorizationRoleId of authorizationRoleIds) {
+      statements.addRoleLockAuthorization.run(guildId, lockedRoleId, authorizationRoleId);
+    }
+  });
 
   return {
     connection,
@@ -411,6 +470,26 @@ function createDatabase(databasePath) {
       });
     },
     removeCommandAlias: (guildId, shortcut) => statements.removeCommandAlias.run(guildId, shortcut),
+    getRoleLock(guildId, lockedRoleId) {
+      const authorizationRoleIds = statements.getRoleLock.all(guildId, lockedRoleId)
+        .map((row) => row.authorization_role_id);
+      return authorizationRoleIds.length ? { locked_role_id: lockedRoleId, authorization_role_ids: authorizationRoleIds } : null;
+    },
+    getRoleLocks(guildId) {
+      const locks = new Map();
+      for (const row of statements.getRoleLocks.all(guildId)) {
+        if (!locks.has(row.locked_role_id)) {
+          locks.set(row.locked_role_id, { locked_role_id: row.locked_role_id, authorization_role_ids: [] });
+        }
+        locks.get(row.locked_role_id).authorization_role_ids.push(row.authorization_role_id);
+      }
+      return [...locks.values()];
+    },
+    setRoleLock(guildId, lockedRoleId, authorizationRoleIds, updatedBy, now = new Date().toISOString()) {
+      if (!authorizationRoleIds.length) throw new Error('A role lock requires at least one authorization role.');
+      setRoleLockTransaction(guildId, lockedRoleId, [...new Set(authorizationRoleIds)], updatedBy, now);
+    },
+    removeRoleLock: (guildId, lockedRoleId) => statements.removeRoleLock.run(guildId, lockedRoleId),
     addForceManagementLog: (entry) => statements.addForceManagementLog.run(entry),
     close: () => connection.close()
   };

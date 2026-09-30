@@ -6,6 +6,7 @@ const forceManagement = require('../commands/forceManagement');
 const vouchCommands = require('../commands/vouchCommands');
 const fakePermissions = require('../commands/fakePermissions');
 const aliases = require('../commands/aliases');
+const roleLocks = require('../commands/roleLocks');
 
 const defaultAliases = new Map([
   ['vg', ['vouch', 'give']],
@@ -34,7 +35,10 @@ const handlers = new Map([
   ['unforeverban', (message, args, db) => forceManagement.execute(message, ['unforeverban', ...args], db)],
   ['foreverbanlist', (message, args, db) => forceManagement.execute(message, ['foreverbanlist', ...args], db)],
   ['fp', (message, args, db) => fakePermissions.execute(message, args, db)],
-  ['alias', (message, args, db) => aliases.execute(message, args, db, { handlers, defaultAliases })]
+  ['alias', (message, args, db) => aliases.execute(message, args, db, { handlers, defaultAliases })],
+  ['lockrole', (message, args, db) => roleLocks.lockRole(message, args, db)],
+  ['unlockrole', (message, args, db) => roleLocks.unlockRole(message, args, db)],
+  ['lockroles', (message, _args, db) => roleLocks.listRoleLocks(message, db)]
 ]);
 
 function resolveCommand(guildId, commandName, args, db) {

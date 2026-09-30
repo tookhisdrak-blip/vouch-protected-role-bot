@@ -138,10 +138,10 @@ test('`-vouchcommands` opens publicly in the originating channel with a dropdown
   assert.equal(regular.user.send, undefined, 'the dashboard must not be sent by DM');
   assert.equal(panel.components[0].components[0].data.placeholder, 'Select a category');
   const categoryOptions = panel.components[0].components[0].options.map((option) => option.data.value);
-  assert.deepEqual(categoryOptions, ['info', 'limited', 'all', 'permissions']);
+  assert.deepEqual(categoryOptions, ['info', 'limited', 'locks', 'all', 'permissions']);
   assert.equal(panel.components[0].components[0].data.custom_id, categoryId(panel));
   const homeLabels = panel.components.slice(1).flatMap((row) => row.components.map((component) => component.data.label));
-  assert.deepEqual(homeLabels, ['Vouch Information', 'Limited Roles', 'All Commands', 'Your Permissions'], 'home shows only category buttons');
+  assert.deepEqual(homeLabels, ['Vouch Information', 'Limited Roles', 'Role Locks', 'All Commands', 'Your Permissions'], 'home shows only category buttons');
   const state = dashboard.panels.get(categoryId(panel).split(':')[1]);
   assert.equal(state.channelId, `channel-${guild.id}`);
   assert.equal(state.messageId, `dashboard-${guild.id}-1`);
@@ -224,7 +224,7 @@ test('Category pages list only that category in compact one-line entries with si
   const owner = addMember(guild.ownerId);
   const { panel, client } = await openPanel(owner, guild, db);
   const ownerCategories = panel.components[0].components[0].options.map((option) => option.data.value);
-  assert.deepEqual(ownerCategories, ['giving', 'info', 'givers', 'roles', 'limited', 'access', 'blacklist', 'admin', 'force', 'forever', 'all', 'permissions']);
+  assert.deepEqual(ownerCategories, ['giving', 'info', 'givers', 'roles', 'limited', 'locks', 'access', 'blacklist', 'admin', 'force', 'forever', 'all', 'permissions']);
   const homeButtons = panel.components.slice(1).flatMap((row) => row.components);
   assert.equal(homeButtons.length, ownerCategories.length, 'home has one button per category and no navigation row');
   assert.equal(panel.components.length, 4);
@@ -575,7 +575,7 @@ test('Displayed access labels match the real command permission gates', async (t
   const denials = {
     owner: /Only the Guild Owner/,
     realowner: /Only the Guild Owner/,
-    os: /Only (the Guild Owner or OS|OS or the Guild Owner)/,
+    os: /Only (the Guild Owner(?:, Owner Allow users,)? or OS|OS or the Guild Owner)/,
     admin: /Only Vouch Admins, OS, or the Guild Owner/,
     force: /Only OS or the Guild Owner/
   };
