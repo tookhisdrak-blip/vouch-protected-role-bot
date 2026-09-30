@@ -139,6 +139,9 @@ async function giveVouch(giver, recipient, reason, db) {
         ? `Vouch recorded; ${deferredRoleIds.length} configured role(s) rate limited by Discord and queued for automatic assignment`
         : 'Vouch recorded; configured roles assigned',
       punishment: null,
+      reward: db.getSettings(guildId).reward_role_id
+        ? `${deferredRoleIds.includes(db.getSettings(guildId).reward_role_id) ? 'Pending' : 'Assigned'} <@&${db.getSettings(guildId).reward_role_id}>`
+        : null,
       created_at: createdAt
     });
     return { ok: true, createdAt, remaining: remainingVouches(guildId, giver.id, db, giver), deferredRoleIds };
@@ -163,7 +166,10 @@ async function takeVouch(actor, recipient, reason, db) {
 
   db.removeVouch(guildId, recipient.id);
   const cleanupFailures = [];
-  for (const roleId of configuredVouchRoles(guildId, db)) {
+  const roleIds = configuredVouchRoles(guildId, db);
+  const rewardRoleId = db.getSettings(guildId).reward_role_id;
+  const hadRewardRole = Boolean(rewardRoleId && recipient.roles.cache.has(rewardRoleId));
+  for (const roleId of roleIds) {
     const result = await removeRoleDetailed(recipient, roleId, reason || 'Active vouch removed', {
       isStillRequired: () => !db.getVouch(guildId, recipient.id)
     });
@@ -180,6 +186,9 @@ async function takeVouch(actor, recipient, reason, db) {
       ? `Vouch removed; role cleanup failed for ${cleanupFailures.length} configured role(s)`
       : 'Vouch and configured roles removed',
     punishment: null,
+    reward: hadRewardRole
+      ? `${cleanupFailures.includes(rewardRoleId) ? 'Removal failed for' : 'Removed'} <@&${rewardRoleId}>`
+      : null,
     created_at: removedAt
   });
   return { ok: true, vouch, removedAt, cleanupFailures };
@@ -188,20 +197,35 @@ async function takeVouch(actor, recipient, reason, db) {
 async function wipeVouches(guild, db, actorId) {
   const activeVouches = db.getVouches(guild.id);
   const roleIds = configuredVouchRoles(guild.id, db);
+  const rewardRoleId = db.getSettings(guild.id).reward_role_id;
   const cleanupFailures = [];
+  let rewardsRemoved = 0;
+  let rewardsQueued = 0;
+  let rewardFailures = 0;
   db.clearVouches(guild.id);
   for (const vouch of activeVouches) {
     const member = await guild.members.fetch(vouch.recipient_id).catch((error) => {
       console.warn(`Could not fetch vouch recipient ${vouch.recipient_id} during wipe in ${guild.id}:`, error.message);
-      for (const roleId of roleIds) cleanupFailures.push({ memberId: vouch.recipient_id, roleId });
+      for (const roleId of roleIds) {
+        cleanupFailures.push({ memberId: vouch.recipient_id, roleId });
+        if (roleId === rewardRoleId) rewardFailures += 1;
+      }
       return null;
     });
     if (!member) continue;
+    const hadRewardRole = Boolean(rewardRoleId && member.roles.cache.has(rewardRoleId));
     for (const roleId of roleIds) {
       const result = await removeRoleDetailed(member, roleId, 'All active vouches wiped', {
         isStillRequired: () => !db.getVouch(guild.id, member.id)
       });
-      if (result.status === 'failed' || result.status === 'busy') cleanupFailures.push({ memberId: member.id, roleId });
+      if (result.status === 'failed' || result.status === 'busy') {
+        cleanupFailures.push({ memberId: member.id, roleId });
+        if (roleId === rewardRoleId && hadRewardRole) rewardFailures += 1;
+      } else if (roleId === rewardRoleId && hadRewardRole && result.status === 'removed') {
+        rewardsRemoved += 1;
+      } else if (roleId === rewardRoleId && hadRewardRole && result.status === 'deferred') {
+        rewardsQueued += 1;
+      }
     }
   }
   await logEvent(guild, db, {
@@ -211,7 +235,10 @@ async function wipeVouches(guild, db, actorId) {
     role_id: db.getSettings(guild.id).vouch_role_id,
     reason: 'Guild Owner requested a full vouch wipe',
     action_taken: `${activeVouches.length} active vouch(es) removed; giver allowance recalculated${cleanupFailures.length ? `; role cleanup failed for ${cleanupFailures.length} assignment(s)` : ''}`,
-    punishment: null
+    punishment: null,
+    reward: rewardRoleId
+      ? `${rewardsRemoved} removed${rewardsQueued ? `; ${rewardsQueued} queued` : ''}${rewardFailures ? `; ${rewardFailures} failed` : ''}`
+      : null
   });
   return { count: activeVouches.length, cleanupFailures };
 }

@@ -84,7 +84,14 @@ function createDatabase(databasePath) {
       reason TEXT,
       action_taken TEXT NOT NULL,
       punishment TEXT,
+      reward TEXT,
       created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS guild_log_channels (
+      guild_id TEXT NOT NULL,
+      category TEXT NOT NULL CHECK (category IN ('vouch', 'ban', 'main', 'admin')),
+      channel_id TEXT NOT NULL,
+      PRIMARY KEY (guild_id, category)
     );
     CREATE TABLE IF NOT EXISTS forced_nicknames (
       guild_id TEXT NOT NULL,
@@ -159,6 +166,10 @@ function createDatabase(databasePath) {
   if (!forceLogColumns.has('punishment')) {
     connection.exec('ALTER TABLE force_management_logs ADD COLUMN punishment TEXT');
   }
+  const eventLogColumns = new Set(connection.pragma('table_info(event_logs)').map((column) => column.name));
+  if (!eventLogColumns.has('reward')) {
+    connection.exec('ALTER TABLE event_logs ADD COLUMN reward TEXT');
+  }
 
   const statements = {
     ensureGuild: connection.prepare(`
@@ -214,8 +225,14 @@ function createDatabase(databasePath) {
     removeBlacklist: connection.prepare('DELETE FROM vouch_blacklist WHERE guild_id = ? AND user_id = ?'),
     addEventLog: connection.prepare(`
       INSERT INTO event_logs
-        (guild_id, event_type, executor_id, affected_user_id, role_id, reason, action_taken, punishment, created_at)
-      VALUES (@guild_id, @event_type, @executor_id, @affected_user_id, @role_id, @reason, @action_taken, @punishment, @created_at)
+        (guild_id, event_type, executor_id, affected_user_id, role_id, reason, action_taken, punishment, reward, created_at)
+      VALUES (@guild_id, @event_type, @executor_id, @affected_user_id, @role_id, @reason, @action_taken, @punishment, @reward, @created_at)
+    `),
+    getLogChannel: connection.prepare('SELECT channel_id FROM guild_log_channels WHERE guild_id = ? AND category = ?'),
+    getLogChannels: connection.prepare('SELECT category, channel_id FROM guild_log_channels WHERE guild_id = ?'),
+    setLogChannel: connection.prepare(`
+      INSERT INTO guild_log_channels (guild_id, category, channel_id) VALUES (?, ?, ?)
+      ON CONFLICT(guild_id, category) DO UPDATE SET channel_id = excluded.channel_id
     `),
     setForcedNickname: connection.prepare(`
       INSERT INTO forced_nicknames (guild_id, user_id, username, nickname, executor_id, created_at, updated_at)
@@ -320,7 +337,23 @@ function createDatabase(databasePath) {
     getBlacklist: (guildId) => statements.getBlacklist.all(guildId),
     addBlacklist: (guildId, userId, actorId, createdAt) => statements.addBlacklist.run(guildId, userId, actorId, createdAt),
     removeBlacklist: (guildId, userId) => statements.removeBlacklist.run(guildId, userId),
-    addEventLog: (entry) => statements.addEventLog.run(entry),
+    addEventLog(entry) {
+      return statements.addEventLog.run({
+        guild_id: entry.guild_id,
+        event_type: entry.event_type,
+        executor_id: entry.executor_id || null,
+        affected_user_id: entry.affected_user_id || null,
+        role_id: entry.role_id || null,
+        reason: entry.reason || null,
+        action_taken: entry.action_taken,
+        punishment: entry.punishment || null,
+        reward: entry.reward || null,
+        created_at: entry.created_at
+      });
+    },
+    getLogChannel: (guildId, category) => statements.getLogChannel.get(guildId, category)?.channel_id ?? null,
+    getLogChannels: (guildId) => statements.getLogChannels.all(guildId),
+    setLogChannel: (guildId, category, channelId) => statements.setLogChannel.run(guildId, category, channelId),
     setForcedNickname: (entry) => statements.setForcedNickname.run(entry),
     getForcedNickname: (guildId, userId) => statements.getForcedNickname.get(guildId, userId),
     getForcedNicknames: (guildId) => statements.getForcedNicknames.all(guildId),

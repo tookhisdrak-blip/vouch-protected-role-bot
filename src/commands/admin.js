@@ -1,12 +1,114 @@
-const { EmbedBuilder } = require('discord.js');
+const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
 const { hasOwnerAccess, isOs, isOwnerOrOs } = require('../services/permissions');
 const { logEvent } = require('../services/eventLogger');
 const { reconcileLimitedRole } = require('../services/roleProtection');
 const { getMember, roleIdFrom, userIdFrom, isRoleMention, isUserMention } = require('./utils');
 
+const LOG_CHANNELS = [
+  { category: 'vouch', name: 'vouch-logs', label: 'Vouch Logs' },
+  { category: 'ban', name: 'ban-logs', label: 'Ban Logs' },
+  { category: 'main', name: 'main-logs', label: 'Main Logs' },
+  { category: 'admin', name: 'admin-logs', label: 'Admin Logs' }
+];
+const logSetupInProgress = new Set();
+
 function ownerOnly(member, db) {
   return hasOwnerAccess(member, db);
+}
+
+function logChannelOverwrites(guild, client) {
+  const allowed = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.EmbedLinks,
+    PermissionFlagsBits.ReadMessageHistory
+  ];
+  const botId = client?.user?.id || guild.members.me?.id;
+  const overwrites = [
+    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: guild.ownerId, allow: allowed }
+  ];
+  if (botId && botId !== guild.ownerId) overwrites.push({ id: botId, allow: allowed });
+  return overwrites;
+}
+
+async function findConfiguredLogChannel(guild, category, name, db) {
+  const configuredId = db.getLogChannel(guild.id, category);
+  let channel = configuredId ? guild.channels.cache.get(configuredId) : null;
+  if (configuredId && !channel && guild.channels.fetch) {
+    try {
+      channel = await guild.channels.fetch(configuredId);
+    } catch (error) {
+      if (error.code !== 10003 && error.rawError?.code !== 10003) throw error;
+    }
+  }
+  if (channel) return channel;
+  return guild.channels.cache.find((candidate) => candidate.name === name
+    && candidate.type === ChannelType.GuildText
+    && candidate.isTextBased());
+}
+
+async function setupVouchLogs(message, db, client) {
+  if (message.author.id !== message.guild.ownerId) {
+    return message.reply({ embeds: [failure('Only the Guild Owner can set up private log channels.')], allowedMentions: { parse: [] } });
+  }
+  if (logSetupInProgress.has(message.guild.id)) {
+    return message.reply({ embeds: [failure('Log channel setup is already in progress. Please try again shortly.')], allowedMentions: { parse: [] } });
+  }
+  const botMember = message.guild.members.me;
+  if (botMember?.permissions && !botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    return message.reply({ embeds: [failure('I need Manage Channels permission to create private log channels.')], allowedMentions: { parse: [] } });
+  }
+
+  logSetupInProgress.add(message.guild.id);
+  try {
+    const channels = [];
+    for (const definition of LOG_CHANNELS) {
+      let channel = await findConfiguredLogChannel(message.guild, definition.category, definition.name, db);
+      if (channel && (channel.type !== ChannelType.GuildText || !channel.isTextBased())) {
+        throw new Error(`Configured ${definition.label} channel is not a text channel.`);
+      }
+      if (!channel) {
+        channel = await message.guild.channels.create({
+          name: definition.name,
+          type: ChannelType.GuildText,
+          permissionOverwrites: logChannelOverwrites(message.guild, client),
+          reason: 'Create private bot moderation log channel'
+        });
+      } else if (typeof channel.permissionOverwrites?.set === 'function') {
+        await channel.permissionOverwrites.set(
+          logChannelOverwrites(message.guild, client),
+          'Secure private bot moderation log channel'
+        );
+      } else {
+        throw new Error(`Could not secure the existing ${definition.label} channel.`);
+      }
+      db.setLogChannel(message.guild.id, definition.category, channel.id);
+      channels.push(`<#${channel.id}>`);
+    }
+
+    await logEvent(message.guild, db, {
+      event_type: 'LOG CHANNELS CONFIGURED',
+      executor_id: message.author.id,
+      affected_user_id: null,
+      reason: null,
+      action_taken: 'Private vouch, ban, main, and admin log channels configured',
+      punishment: null
+    });
+    return message.reply({
+      embeds: [success(`Private log channels ready: ${channels.join(' ')}`, 'Logging ready')],
+      allowedMentions: { parse: [] }
+    });
+  } catch (error) {
+    console.error(`Could not configure private log channels in ${message.guild.id}:`, error);
+    return message.reply({
+      embeds: [failure('Log setup is incomplete. Check Manage Channels permission and try `-vouchlogsetup` again.')],
+      allowedMentions: { parse: [] }
+    });
+  } finally {
+    logSetupInProgress.delete(message.guild.id);
+  }
 }
 
 async function setRole(message, args, db) {
@@ -195,4 +297,4 @@ async function blacklist(message, args, db) {
   return message.reply({ embeds: [failure('Use `-vouchblacklist add @user`, `remove @user`, or `list [page]`.')], allowedMentions: { parse: [] } });
 }
 
-module.exports = { setRole, setLimit, limitedRoles, setLog, blacklist };
+module.exports = { setRole, setLimit, limitedRoles, setLog, setupVouchLogs, blacklist };

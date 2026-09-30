@@ -67,6 +67,7 @@ const SHORT_DESCRIPTIONS = {
   '-setrole os remove @user': 'Remove OS from a user',
   '-setrole os remove @role': 'Unset the OS role',
   '-setlog #channel': 'Set the log channel',
+  '-vouchlogsetup': 'Create private bot log channels',
   '-vouch wipeall': 'Clear all active vouches',
   '-forcemanage': 'Open the Force Management panel',
   '-forcenickname @user [nickname]': 'Force a nickname on a user',

@@ -424,6 +424,9 @@ test('wipeall removes vouches and their configured roles without clearing other 
   assert.equal(db.getSettings(guild.id).stripstaff_role_id, stripstaffRole);
   assert.equal(db.getSettings(guild.id).default_giver_limit, 6);
   assert.ok(db.connection.prepare('SELECT COUNT(*) AS count FROM event_logs WHERE guild_id = ?').get(guild.id).count >= 3);
+  const wipeLog = db.connection.prepare("SELECT affected_user_id, reward FROM event_logs WHERE event_type = 'VOUCH WIPE'").get();
+  assert.equal(wipeLog.affected_user_id, null);
+  assert.equal(wipeLog.reward, '2 removed');
 });
 
 test('wipeall reports role cleanup failures after clearing only active vouches', async (t) => {

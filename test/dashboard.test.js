@@ -574,7 +574,7 @@ test('Displayed access labels match the real command permission gates', async (t
   }).join(' ');
   const denials = {
     owner: /Only the Guild Owner/,
-    realowner: /Only the Guild Owner can grant or remove Owner Allow/,
+    realowner: /Only the Guild Owner/,
     os: /Only (the Guild Owner or OS|OS or the Guild Owner)/,
     admin: /Only Vouch Admins, OS, or the Guild Owner/,
     force: /Only OS or the Guild Owner/

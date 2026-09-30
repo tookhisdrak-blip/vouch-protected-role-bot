@@ -19,6 +19,7 @@ const catalog = [
   { command: '-setrole os remove @user', summary: 'Remove OS access from a user.', category: 'Vouch Administration', permission: 'owner' },
   { command: '-setrole os remove @role', summary: 'Unset the configured OS role.', category: 'Vouch Administration', permission: 'owner' },
   { command: '-setlog #channel', summary: 'Configure the event log channel.', category: 'Vouch Administration', permission: 'owner' },
+  { command: '-vouchlogsetup', summary: 'Create private persistent channels for bot and moderation logs.', category: 'Vouch Administration', permission: 'realowner' },
   { command: '-vouch setrole @role', summary: 'Set the vouch role. Members without an active vouch have it removed automatically. OS or Guild Owner.', category: 'Vouch Roles', permission: 'os' },
   { command: '-vouch role add @role', summary: 'Alias for setting the vouch role.', category: 'Vouch Roles', permission: 'os', aliasOf: '-vouch setrole @role' },
   { command: '-vouch unsetrole', summary: 'Unset the vouch role. Existing vouches and limited-role settings are kept. OS or Guild Owner.', category: 'Vouch Roles', permission: 'os' },

@@ -13,6 +13,7 @@ const handlers = new Map([
   ['setlimit', (message, args, db) => admin.setLimit(message, args, db)],
   ['limitedroles', (message, _args, db) => admin.limitedRoles(message, db)],
   ['setlog', (message, args, db) => admin.setLog(message, args, db)],
+  ['vouchlogsetup', (message, _args, db, client) => admin.setupVouchLogs(message, db, client)],
   ['vouchhelp', (message, args, db) => help.execute(message, args, db)],
   ['vouchcommands', (message, args, db) => vouchCommands.execute(message, args, db)],
   ['forcemanage', (message, args, db) => forceManagement.execute(message, ['forcemanage', ...args], db)],

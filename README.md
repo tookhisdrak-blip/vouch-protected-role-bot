@@ -11,7 +11,7 @@ A CommonJS Discord moderation bot for persistent vouches and protected-role limi
 5. Invite the bot with View Audit Log, Manage Roles, View Channels, Send Messages, Embed Links, and Read Message History permissions. Place its role above every role it must assign or remove.
 6. Run `npm start`.
 
-SQLite is stored at `./data/moderation.sqlite` by default for local development. Set `DATABASE_PATH` to use another location. Configuration, vouches, limited roles, force rules, bans, and logs all live in this one file and survive restarts as long as the file is retained.
+SQLite is stored at `./data/moderation.sqlite` by default for local development. Set `DATABASE_PATH` to use another location. Configuration, vouches, limited roles, force rules, bans, log-channel IDs, and logs all live in this one file and survive restarts as long as the file is retained. The Guild Owner can run `-vouchlogsetup` once to create private Vouch, Ban, Main, and Admin log channels; the bot needs Manage Channels permission. Re-running setup reuses the configured channels.
 
 ## Deploying on Railway
 
@@ -32,6 +32,7 @@ To move an existing local database to Railway, stop the local bot first so the `
 - `-vouch setrole @role`
 - `-vouch setreward @role`
 - `-setlog #channel`
+- `-vouchlogsetup` (Guild Owner; creates private Vouch, Ban, Main, and Admin log channels)
 - `-vouch addgiver @user`
 
 Use `-vouchhelp` or `-vouchcommands` to open the interactive, permission-filtered command dashboard. The Home page is a small panel with a category dropdown and one button per category (Giving & Removing, Vouch Information, Giver Management, Vouch & Reward Roles, Limited Roles, Blacklist, Administration, Force Management, Forever Bans, All Commands, Your Permissions). A category page lists only that category's commands, one compact line each (command and short description), up to five per page, with the category dropdown and Home/Back/Previous/Next buttons. `-vouchhelp limited` opens a category directly, and `-vouchhelp 2` opens page 2 of All Commands. The dashboard closes after 5 minutes of inactivity. Only commands you are allowed to use are listed; Owners see the complete command set.
@@ -57,6 +58,7 @@ Use `-vouchhelp` or `-vouchcommands` to open the interactive, permission-filtere
 - `-setrole @role limit number` (legacy alias for `-setlimit`)
 - `-limitedroles`
 - `-setlog #channel`
+- `-vouchlogsetup` (Guild Owner; creates private persistent channels for vouch, ban, main, and admin events)
 - `-vouchhelp [category|page]` (interactive category dashboard with navigation buttons)
 - `-vouchcommands` (same interactive category dashboard, posted in the channel)
 - `-forcemanage` (OS and Guild Owner; private DM panel)

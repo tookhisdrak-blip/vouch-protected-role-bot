@@ -141,6 +141,7 @@ test('vouch flow assigns roles, consumes allowance, and restores it when removed
   assert.equal(removalLog.executor_id, giver.id);
   assert.equal(removalLog.affected_user_id, first.id);
   assert.equal(removalLog.reason, 'retracted');
+  assert.equal(removalLog.reward, 'Removed <@&reward-role>');
 
   assert.equal((await takeVouch(giver, second, 'also retracted', db)).ok, true);
   assert.equal(remainingVouches(guild.id, giver.id, db), 2);
@@ -709,7 +710,7 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
   assert.deepEqual([...handlers.keys()].sort(), [
     'forcemanage', 'forcenickname', 'forcerolestrip', 'forcestrip', 'foreverban', 'foreverbanlist', 'fp',
     'limitedroles', 'rolestrip', 'setlimit', 'setlog', 'setrole', 'unforcenickname', 'unforcerolestrip',
-    'unforcestrip', 'unforeverban', 'vouch', 'vouchblacklist', 'vouchcommands', 'vouchhelp'
+    'unforcestrip', 'unforeverban', 'vouch', 'vouchblacklist', 'vouchcommands', 'vouchhelp', 'vouchlogsetup'
   ]);
 
   const helpDashboard = require('../src/commands/vouchCommands');
@@ -891,7 +892,7 @@ test('role permission failures are logged and missing audit access never punishe
   assert.equal(manageEvent.punishment, 'STRIPSTAFF removed');
   assert.equal(executor.roles.cache.has('stripstaff-role'), false);
   assert.deepEqual(sent[0].allowedMentions.parse, []);
-  assert.equal(sent[0].embeds[0].data.fields.find((field) => field.name === 'Executor').value, '<@executor>');
+  assert.equal(sent[0].embeds[0].data.fields.find((field) => field.name === 'Who').value, '<@executor>');
   assert.ok(sent[0].embeds[0].data.timestamp);
 
   const auditFixture = createFixture('audit-permission-guild');
@@ -924,8 +925,8 @@ test('role permission failures are logged and missing audit access never punishe
   assert.match(auditEvent.reason, /Audit log unavailable/);
   assert.equal(auditExecutor.roles.cache.has('stripstaff-role'), true);
   assert.deepEqual(auditEmbeds[0].allowedMentions.parse, []);
-  assert.equal(auditEmbeds[0].embeds[0].data.fields.find((field) => field.name === 'Executor').value, 'Unknown');
-  assert.equal(auditEmbeds[0].embeds[0].data.fields.find((field) => field.name === 'Affected').value, '<@audit-target>');
+  assert.equal(auditEmbeds[0].embeds[0].data.fields.find((field) => field.name === 'Who').value, 'Unknown');
+  assert.equal(auditEmbeds[0].embeds[0].data.fields.find((field) => field.name === 'Target').value, '<@audit-target>');
 });
 
 test('startup reconciliation removes invalid roles without logging punishment', async (t) => {
