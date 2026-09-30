@@ -2,6 +2,7 @@ const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js')
 const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
 const { hasOwnerAccess, isOs, isOwnerOrOs } = require('../services/permissions');
 const { logEvent } = require('../services/eventLogger');
+const { listAllGuildMembers, membersWithRole, countMembersByRole } = require('../services/guildMembers');
 const { reconcileLimitedRole } = require('../services/roleProtection');
 const { getMember, roleIdFrom, userIdFrom, isRoleMention, isUserMention } = require('./utils');
 
@@ -183,15 +184,23 @@ async function configureLimitedRole(message, roleValue, limitValue, db) {
   if (!Number.isSafeInteger(limit) || limit < 0) {
     return message.reply({ embeds: [failure('The limit must be a whole number greater than or equal to zero. Use `-setlimit @role|ROLE_ID number`.')], allowedMentions: { parse: [] } });
   }
+  let currentMembers;
   try {
-    await message.guild.members.fetch();
+    currentMembers = await listAllGuildMembers(message.guild);
   } catch (error) {
-    console.error(`Could not refresh members before configuring role limit ${roleId} in ${message.guild.id}:`, error);
+    console.error(`Could not list members before configuring role limit ${roleId} in ${message.guild.id}:`, error);
     return message.reply({ embeds: [failure('I could not refresh the current server members, so the role limit was not changed.')], allowedMentions: { parse: [] } });
   }
 
+  const currentRoleMembers = membersWithRole(currentMembers, roleId);
   db.setLimitedRole(message.guild.id, roleId, limit);
-  const reconciliation = await reconcileLimitedRole(message.guild, db, roleId, 'Limited role limit configured');
+  const reconciliation = await reconcileLimitedRole(
+    message.guild,
+    db,
+    roleId,
+    'Limited role limit configured',
+    currentRoleMembers
+  );
   await logEvent(message.guild, db, {
     event_type: 'ROLE LIMIT CONFIGURED', executor_id: message.author.id, affected_user_id: null,
     role_id: roleId, reason: null,
@@ -214,15 +223,16 @@ async function setLimit(message, args, db) {
 async function limitedRoles(message, db) {
   const roles = db.getLimitedRoles(message.guild.id);
   if (!roles.length) return message.reply({ embeds: [embed('Limited roles', 'No roles have member limits configured.')], allowedMentions: { parse: [] } });
+  let currentMembers;
   try {
-    await message.guild.members.fetch();
+    currentMembers = await listAllGuildMembers(message.guild);
   } catch (error) {
-    console.error(`Could not refresh member counts for limited roles in ${message.guild.id}:`, error);
+    console.error(`Could not list members for limited roles in ${message.guild.id}:`, error);
     return message.reply({ embeds: [failure('I could not refresh the current server member counts. Please try again.')], allowedMentions: { parse: [] } });
   }
+  const counts = countMembersByRole(currentMembers, roles.map(({ role_id: roleId }) => roleId));
   const lines = roles.map(({ role_id: roleId, member_limit: limit }) => {
-    const role = message.guild.roles.cache.get(roleId);
-    const count = role?.members.size ?? 0;
+    const count = counts.get(roleId);
     return `${mentionRole(roleId)} — members on this role: ${count}/${limit} (LIMITED)`;
   });
   const pages = [];

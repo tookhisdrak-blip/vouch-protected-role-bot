@@ -215,11 +215,11 @@ async function latestRoleAssignmentMembers(guild, roleId, members) {
   return { members: assignments, auditUnavailable: false };
 }
 
-async function reconcileLimitedRole(guild, db, roleId, reason = 'Limited role reconciliation') {
+async function reconcileLimitedRole(guild, db, roleId, reason = 'Limited role reconciliation', fetchedRoleMembers = null) {
   const role = guild.roles.cache.get(roleId);
   const config = db.getLimitedRole(guild.id, roleId);
   if (!role || !config) return { removed: [], remainingExcess: 0, auditUnavailable: false };
-  const currentMembers = role.members;
+  const currentMembers = fetchedRoleMembers || role.members;
   const excessCount = currentMembers.size - config.member_limit;
   if (excessCount <= 0) return { removed: [], remainingExcess: 0, auditUnavailable: false };
 
@@ -238,11 +238,16 @@ async function reconcileLimitedRole(guild, db, roleId, reason = 'Limited role re
   const removed = [];
   for (const member of selectedMembers) {
     const result = await removeRoleDetailed(member, roleId, reason, {
-      isStillRequired: () => limitStillExceeded(guild, roleId, db)
+      isStillRequired: fetchedRoleMembers
+        ? () => currentMembers.filter((candidate) => candidate.roles.cache.has(roleId)).size > config.member_limit
+        : () => limitStillExceeded(guild, roleId, db)
     });
     if (result.status === 'removed' || result.status === 'deferred') removed.push(member.id);
   }
-  const remainingExcess = Math.max(0, role.members.size - config.member_limit);
+  const remainingCount = fetchedRoleMembers
+    ? currentMembers.filter((member) => member.roles.cache.has(roleId)).size
+    : role.members.size;
+  const remainingExcess = Math.max(0, remainingCount - config.member_limit);
   if (remainingExcess > 0) {
     console.warn(`Limited role ${roleId} in ${guild.id} remains over limit by ${remainingExcess}; no unverified member was removed.`);
   }

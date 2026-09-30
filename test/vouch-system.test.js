@@ -561,6 +561,62 @@ test('setlimit accepts role mentions and IDs, persists independently, and limite
   assert.equal(db.getLimitedRole(guild.id, idRoleId).member_limit, 10);
 });
 
+test('limited-role commands paginate the REST member list when gateway member chunks time out', async (t) => {
+  const { db, guild, addRole, addMember } = createFixture('limited-role-rest-pagination-guild');
+  t.after(() => db.close());
+  const roleId = '300000000000000062';
+  const owner = addMember(OWNER_ID);
+  addRole(roleId);
+
+  const remoteMembers = new Collection([[owner.id, owner]]);
+  for (let index = 0; index < 1_011; index += 1) {
+    const member = addMember(String(500000000000000000n + BigInt(index)), index < 12 ? [roleId] : []);
+    remoteMembers.set(member.id, member);
+  }
+  guild.members.cache.clear();
+
+  let fetchCalls = 0;
+  let listCalls = 0;
+  let concurrentLists = 0;
+  let maxConcurrentLists = 0;
+  guild.members.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("Members didn't arrive in time.");
+  };
+  guild.members.list = async ({ after, limit, cache }) => {
+    listCalls += 1;
+    concurrentLists += 1;
+    maxConcurrentLists = Math.max(maxConcurrentLists, concurrentLists);
+    await Promise.resolve();
+    const page = new Collection([...remoteMembers]
+      .filter(([memberId]) => !after || memberId > after)
+      .slice(0, limit));
+    if (cache) {
+      for (const [memberId, member] of page) guild.members.cache.set(memberId, member);
+    }
+    concurrentLists -= 1;
+    return page;
+  };
+
+  const configure = makeMessage(guild, owner, `-setlimit <@&${roleId}> 20`);
+  await handleMessageCreate(configure, {}, db, '-');
+
+  assert.equal(db.getLimitedRole(guild.id, roleId).member_limit, 20);
+  assert.match(configure.replies[0].embeds[0].data.description, /now has a member limit of 20/);
+  assert.equal(listCalls, 2, 'setlimit should fetch every REST page for a guild larger than 1,000 members');
+  assert.equal(fetchCalls, 0, 'the gateway member-chunk request that times out must not be used');
+
+  guild.members.cache.clear();
+  const list = makeMessage(guild, owner, '-limitedroles');
+  await handleMessageCreate(list, {}, db, '-');
+
+  assert.match(list.replies[0].embeds[0].data.description,
+    new RegExp(`<@&${roleId}> — members on this role: 12/20 \\(LIMITED\\)`));
+  assert.equal(listCalls, 4, 'limitedroles should independently refresh every REST page');
+  assert.equal(fetchCalls, 0);
+  assert.equal(maxConcurrentLists, 1, 'member pages must be requested sequentially through the REST rate-limit queue');
+});
+
 test('end-to-end setlimit rejects the 21st member, punishes only verified staff roles, and displays 20/20', async (t) => {
   const { db, guild, addRole, addMember } = createFixture('limited-role-live-enforcement-guild');
   t.after(() => db.close());
