@@ -6,7 +6,7 @@ const {
   EmbedBuilder,
   StringSelectMenuBuilder
 } = require('discord.js');
-const { COLORS, failure } = require('../utils/embeds');
+const { COLORS, failure, argumentFailure } = require('../utils/embeds');
 const {
   isGuildOwner, isOwnerAllowed, hasOwnerAccess, isOs, isVouchAdmin, isFounder, isForceManager
 } = require('../services/permissions');
@@ -348,14 +348,14 @@ async function executeHelp(message, args, db) {
   if (/^-?\d+$/.test(argument)) {
     const page = Number(argument);
     if (!Number.isSafeInteger(page) || page < 1) {
-      return message.reply({ embeds: [failure('Page must be a positive whole number.')], allowedMentions: { parse: [] } });
+      return message.reply({ embeds: [argumentFailure('Use a positive page number bro.')], allowedMentions: { parse: [] } });
     }
     return openDashboard(message, db, { commandName: 'vouchhelp', category: 'all', page });
   }
   const category = resolveCategoryArgument(argument);
   if (!category || !canViewCategory(category, message.member, db)) {
     const available = categoriesFor(message.member, db).map((key) => `\`${key}\``).join(', ');
-    return message.reply({ embeds: [failure(`Unknown or unavailable help category. Available categories: ${available}.`)], allowedMentions: { parse: [] } });
+    return message.reply({ embeds: [argumentFailure(`Use a valid category bro: ${available}.`)], allowedMentions: { parse: [] } });
   }
   return openDashboard(message, db, { commandName: 'vouchhelp', category });
 }

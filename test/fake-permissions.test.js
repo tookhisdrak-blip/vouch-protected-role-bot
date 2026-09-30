@@ -168,7 +168,7 @@ test('OS automatically has every fake permission and can manage fake permissions
   assert.match(await run(guild, db, osUser, '-fp list'), /`ban_members`: <@420000000000000034>/);
   assert.match(await run(guild, db, osUser, `-fp remove <@${mod.id}> ban_members`), /removed from/);
   assert.equal(hasFakePermission(mod, db, 'ban_members'), false);
-  assert.match(await run(guild, db, osUser, `-fp add <@${mod.id}> manage_everything`), /Unknown fake permission/);
+  assert.match(await run(guild, db, osUser, `-fp add <@${mod.id}> manage_everything`), /Use a valid permission/);
 });
 
 test('Guild Owner automatically has every fake permission; edited commands work', async (t) => {

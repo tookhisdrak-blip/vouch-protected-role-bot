@@ -510,9 +510,9 @@ test('`-vouchhelp` opens the same category dashboard, supports category/page sho
   assert.match(updated.embeds[0].data.footer.text, /^Page 1\//);
 
   await handleMessageCreate(makeHelpMessage('-vouchhelp nonsense'), client, db, '-');
-  assert.match(replies.at(-1).embeds[0].data.description, /Unknown or unavailable help category/);
+  assert.match(replies.at(-1).embeds[0].data.description, /Use a valid category bro/);
   await handleMessageCreate(makeHelpMessage('-vouchhelp 0'), client, db, '-');
-  assert.match(replies.at(-1).embeds[0].data.description, /positive whole number/);
+  assert.match(replies.at(-1).embeds[0].data.description, /positive page number bro/);
   assert.equal(sent.length, 3);
 });
 

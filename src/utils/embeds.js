@@ -16,6 +16,22 @@ function failure(description, title = 'Unable to complete') {
   return embed(title, description, COLORS.error);
 }
 
+function argumentFailure(description) {
+  return embed('Invalid command', description, COLORS.error);
+}
+
+function userArgumentFailure() {
+  return argumentFailure('Use a @mention or user ID bro.');
+}
+
+function roleArgumentFailure() {
+  return argumentFailure('Use a @role or role ID bro.');
+}
+
+function userRoleArgumentFailure() {
+  return argumentFailure('Use a @user/user ID and @role/role ID bro.');
+}
+
 function mentionUser(userId) {
   return `<@${userId}>`;
 }
@@ -24,4 +40,15 @@ function mentionRole(roleId) {
   return `<@&${roleId}>`;
 }
 
-module.exports = { COLORS, embed, success, failure, mentionUser, mentionRole };
+module.exports = {
+  COLORS,
+  embed,
+  success,
+  failure,
+  argumentFailure,
+  userArgumentFailure,
+  roleArgumentFailure,
+  userRoleArgumentFailure,
+  mentionUser,
+  mentionRole
+};

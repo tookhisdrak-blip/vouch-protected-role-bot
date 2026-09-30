@@ -1,4 +1,4 @@
-const { embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
+const { embed, success, failure, argumentFailure, mentionRole, mentionUser } = require('../utils/embeds');
 const { isOwnerOrOs } = require('../services/permissions');
 const { FAKE_PERMISSIONS, normalizeFakePermission } = require('../services/fakePermissions');
 const { logEvent } = require('../services/eventLogger');
@@ -24,13 +24,14 @@ function targetText(target) {
 
 async function change(message, args, db, adding) {
   const [targetInput, permissionInput] = args;
-  if (!targetInput || !permissionInput) return reply(message, { embeds: [failure(USAGE)] });
+  if (!targetInput) return reply(message, { embeds: [argumentFailure('Use a @user/user ID or @role/role ID bro.')] });
+  if (!permissionInput) return reply(message, { embeds: [argumentFailure('Add a permission name bro.')] });
   const permission = normalizeFakePermission(permissionInput);
   if (!permission) {
-    return reply(message, { embeds: [failure(`Unknown fake permission. Available: ${Object.keys(FAKE_PERMISSIONS).map((key) => `\`${key}\``).join(', ')}.`)] });
+    return reply(message, { embeds: [argumentFailure(`Use a valid permission: ${Object.keys(FAKE_PERMISSIONS).map((key) => `\`${key}\``).join(', ')}.`)] });
   }
   const target = await resolveTarget(message.guild, message.client, targetInput);
-  if (!target) return reply(message, { embeds: [failure('I could not resolve that user or role.')] });
+  if (!target) return reply(message, { embeds: [argumentFailure('Use a valid @user/user ID or @role/role ID bro.')] });
 
   const guildId = message.guild.id;
   const changed = adding
@@ -74,7 +75,7 @@ async function execute(message, args, db) {
   if (sub === 'add') return change(message, args.slice(1), db, true);
   if (sub === 'remove') return change(message, args.slice(1), db, false);
   if (sub === 'list') return list(message, db);
-  return reply(message, { embeds: [failure(USAGE)] });
+  return reply(message, { embeds: [argumentFailure('Use `add`, `remove`, or `list` bro.')] });
 }
 
 module.exports = { execute, resolveTarget };

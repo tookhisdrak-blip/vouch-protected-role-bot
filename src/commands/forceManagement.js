@@ -6,7 +6,10 @@ const {
   EmbedBuilder,
   StringSelectMenuBuilder
 } = require('discord.js');
-const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
+const {
+  COLORS, embed, success, failure, argumentFailure, userArgumentFailure, roleArgumentFailure,
+  userRoleArgumentFailure, mentionRole, mentionUser
+} = require('../utils/embeds');
 const { isForceManager } = require('../services/permissions');
 const { hasFakePermission } = require('../services/fakePermissions');
 const { logForceEvent } = require('../services/forceLogger');
@@ -149,9 +152,9 @@ async function forceManage(message, db) {
 async function forcedNickname(message, args, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const member = await getMember(message.guild, args[0]);
-  if (!member) return message.reply({ embeds: [failure('Use `-forcenickname @user [nickname]`.')], allowedMentions: { parse: [] } });
+  if (!member) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   const nickname = args.slice(1).join(' ').trim();
-  if (nickname.length > 32) return message.reply({ embeds: [failure('Nicknames must be 32 characters or fewer.')], allowedMentions: { parse: [] } });
+  if (nickname.length > 32) return message.reply({ embeds: [argumentFailure('Keep the nickname under 33 characters bro.')], allowedMentions: { parse: [] } });
   const { result } = await setForcedNickname(member, nickname, message.author.id, db);
   if (result.status === 'failed') {
     return message.reply({ embeds: [failure('The forced nickname rule was saved, but I could not apply it. Check Manage Nicknames and role hierarchy.')], allowedMentions: { parse: [] } });
@@ -162,7 +165,7 @@ async function forcedNickname(message, args, db) {
 async function unforcedNickname(message, args, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const userId = userIdFrom(args[0]);
-  if (!userId) return message.reply({ embeds: [failure('Use `-unforcenickname @user`.')], allowedMentions: { parse: [] } });
+  if (!userId) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   const result = await removeForcedNickname(message.guild, userId, message.author.id, db);
   if (!result.removed) return message.reply({ embeds: [failure('That member has no forced nickname rule.')], allowedMentions: { parse: [] } });
   return message.reply({ embeds: [success(`The forced nickname rule for ${mentionUser(userId)} was removed. Their current nickname was left unchanged.`)], allowedMentions: { parse: [] } });
@@ -172,7 +175,9 @@ async function forcedRoleStrip(message, args, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const member = await getMember(message.guild, args[0]);
   const role = await resolveRole(message.guild, args[1]);
-  if (!member || !role) return message.reply({ embeds: [failure('Use `-forcerolestrip @user @role`.')], allowedMentions: { parse: [] } });
+  if (!member && !role) return message.reply({ embeds: [userRoleArgumentFailure()], allowedMentions: { parse: [] } });
+  if (!member) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
+  if (!role) return message.reply({ embeds: [roleArgumentFailure()], allowedMentions: { parse: [] } });
   const result = await createForcedRoleStrip(member, role.id, message.author.id, db);
   if (result.removal.status === 'failed') {
     return message.reply({ embeds: [failure('The rule was saved, but I could not remove the role immediately. Check Manage Roles and role hierarchy.')], allowedMentions: { parse: [] } });
@@ -183,7 +188,7 @@ async function forcedRoleStrip(message, args, db) {
 async function unforcedRoleStrip(message, args, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const userId = userIdFrom(args[0]);
-  if (!userId) return message.reply({ embeds: [failure('Use `-unforcerolestrip @user`.')], allowedMentions: { parse: [] } });
+  if (!userId) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   const count = await removeForcedRoleStripsForUser(message.guild, userId, message.author.id, db);
   return message.reply({ embeds: [success(`${count} forced role-strip rule(s) were removed for ${mentionUser(userId)}.`)], allowedMentions: { parse: [] } });
 }
@@ -198,7 +203,7 @@ function clearExpiredPending() {
 async function globalRoleStrip(message, roleInput, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const role = await resolveRole(message.guild, roleInput);
-  if (!role) return message.reply({ embeds: [failure('Role not found. Use a role mention, ID, or exact role name.')], allowedMentions: { parse: [] } });
+  if (!role) return message.reply({ embeds: [roleArgumentFailure()], allowedMentions: { parse: [] } });
   if (isProtectedGlobalStripRole(message.guild, role.id, db)) {
     return message.reply({ embeds: [failure('The configured OS and official vouch roles cannot be globally stripped.')], allowedMentions: { parse: [] } });
   }
@@ -233,10 +238,10 @@ async function globalRoleStrip(message, roleInput, db) {
 async function foreverBan(message, args, db) {
   if (!hasFakePermission(message.member, db, 'ban_members')) return denial(message, true);
   const userId = userIdFrom(args[0]);
-  if (!userId) return message.reply({ embeds: [failure('Use `-foreverban @user [reason]`.')], allowedMentions: { parse: [] } });
+  if (!userId) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   const targetMember = await message.guild.members.fetch(userId).catch(() => null);
   const targetUser = targetMember?.user || await message.client.users.fetch(userId).catch(() => null);
-  if (!targetUser) return message.reply({ embeds: [failure('I could not resolve that Discord account.')], allowedMentions: { parse: [] } });
+  if (!targetUser) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   const result = await createForeverBan(message.guild, targetUser, args.slice(1).join(' ').trim(), message.author.id, db);
   if (result.failureReason) {
     return message.reply({ embeds: [failure('The forever-ban rule was saved, but the immediate ban failed. The rule remains active and will be retried if this account joins.')], allowedMentions: { parse: [] } });
@@ -247,7 +252,7 @@ async function foreverBan(message, args, db) {
 async function unForeverBan(message, args, db) {
   if (!hasFakePermission(message.member, db, 'ban_members')) return denial(message, true);
   const userId = userIdFrom(args[0]);
-  if (!userId) return message.reply({ embeds: [failure('Use `-unforeverban @user`.')], allowedMentions: { parse: [] } });
+  if (!userId) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   const result = await removeForeverBan(message.guild, userId, message.author.id, db);
   if (!result.removed) return message.reply({ embeds: [failure('That account has no active forever-ban rule.')], allowedMentions: { parse: [] } });
   return message.reply({ embeds: [success(`The forever-ban record for account ${userId} was removed. Their current Discord ban was not changed.`)], allowedMentions: { parse: [] } });
@@ -256,7 +261,7 @@ async function unForeverBan(message, args, db) {
 async function foreverBanList(message, args, db) {
   if (!hasFakePermission(message.member, db, 'ban_members')) return denial(message, true);
   const page = Number(args[0] || 1);
-  if (!Number.isSafeInteger(page) || page < 1) return message.reply({ embeds: [failure('Page must be a positive whole number.')], allowedMentions: { parse: [] } });
+  if (!Number.isSafeInteger(page) || page < 1) return message.reply({ embeds: [argumentFailure('Use a positive page number bro.')], allowedMentions: { parse: [] } });
   const records = db.getForeverBans(message.guild.id);
   const pageCount = Math.max(1, Math.ceil(records.length / 10));
   const currentPage = Math.min(page, pageCount);
@@ -283,7 +288,7 @@ async function execute(message, args, db) {
   if (command === 'foreverban') return foreverBan(message, args.slice(1), db);
   if (command === 'unforeverban') return unForeverBan(message, args.slice(1), db);
   if (command === 'foreverbanlist') return foreverBanList(message, args.slice(1), db);
-  return message.reply({ embeds: [failure('Unknown Force Management command.')], allowedMentions: { parse: [] } });
+  return message.reply({ embeds: [argumentFailure('Add a valid Force Management action bro.')], allowedMentions: { parse: [] } });
 }
 
 async function handleInteraction(interaction, db) {

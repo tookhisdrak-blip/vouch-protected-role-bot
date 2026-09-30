@@ -114,11 +114,29 @@ function createFixture(db = createDatabase(':memory:')) {
     return replies[0]?.embeds[0].data.description || '';
   }
 
+  async function runEmbed(member, content) {
+    const replies = [];
+    const message = {
+      guild,
+      member,
+      author: member.user,
+      content,
+      client,
+      replies,
+      async reply(payload) {
+        replies.push(payload);
+        return payload;
+      }
+    };
+    await handleMessageCreate(message, client, db, '-');
+    return replies[0]?.embeds[0].data;
+  }
+
   function setDatabase(nextDatabase) {
     db = nextDatabase;
   }
 
-  return { db, guild, remoteMembers, remoteRoles, bans, addRole, addMember, run, setDatabase };
+  return { db, guild, remoteMembers, remoteRoles, bans, addRole, addMember, run, runEmbed, setDatabase };
 }
 
 test('user and role commands accept mentions and uncached IDs without confusing target types', async (t) => {
@@ -196,10 +214,10 @@ test('custom aliases persist, forward arguments, reject conflicts, and never byp
   assert.match(await fixture.run(regular, '-alias add fb foreverban'), /Only OS or the Guild Owner/);
   assert.equal(db.getCommandAlias(fixture.guild.id, 'fb'), undefined);
   assert.match(await fixture.run(osUser, '-alias add fb foreverban'), /now runs `-foreverban`/);
-  assert.match(await fixture.run(osUser, '-alias add vg foreverban'), /conflicts with an existing command or default alias/);
-  assert.match(await fixture.run(osUser, '-alias add vouch foreverban'), /conflicts with an existing command or default alias/);
-  assert.match(await fixture.run(osUser, '-alias add nested fb'), /original command must be an existing command/);
-  assert.match(await fixture.run(osUser, '-alias add Upper! foreverban'), /shortcuts must be/);
+  assert.match(await fixture.run(osUser, '-alias add vg foreverban'), /already reserved/);
+  assert.match(await fixture.run(osUser, '-alias add vouch foreverban'), /already reserved/);
+  assert.match(await fixture.run(osUser, '-alias add nested fb'), /existing original command/);
+  assert.match(await fixture.run(osUser, '-alias add Upper! foreverban'), /valid shortcut/);
   assert.match(await fixture.run(osUser, '-alias add fb vouch check'), /now runs `-vouch check`/);
   assert.equal(db.getCommandAlias(fixture.guild.id, 'fb').command, 'vouch check');
   assert.match(await fixture.run(osUser, '-alias add fb foreverban'), /now runs `-foreverban`/);
@@ -217,4 +235,41 @@ test('custom aliases persist, forward arguments, reject conflicts, and never byp
 
   assert.match(await fixture.run(osUser, '-alias remove fb'), /was removed/);
   assert.equal(db.getCommandAlias(fixture.guild.id, 'fb'), undefined);
+});
+
+test('missing command arguments use short specific errors through commands and aliases', async (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.db.close());
+  const owner = fixture.addMember(OWNER_ID);
+  const user = fixture.addMember('430000000000000031');
+  fixture.db.addOsUser(fixture.guild.id, owner.id);
+  await fixture.run(owner, '-alias add fb foreverban');
+
+  const missingAliasUser = await fixture.runEmbed(owner, '-fb');
+  assert.equal(missingAliasUser.title, 'Invalid command');
+  assert.equal(missingAliasUser.description, 'Use a @mention or user ID bro.');
+
+  const missingUser = await fixture.runEmbed(owner, '-vouch addgiver');
+  assert.equal(missingUser.title, 'Invalid command');
+  assert.equal(missingUser.description, 'Use a @mention or user ID bro.');
+
+  const missingRole = await fixture.runEmbed(owner, '-vouch setrole');
+  assert.equal(missingRole.title, 'Invalid command');
+  assert.equal(missingRole.description, 'Use a @role or role ID bro.');
+
+  const missingBoth = await fixture.runEmbed(owner, '-forcerolestrip');
+  assert.equal(missingBoth.title, 'Invalid command');
+  assert.equal(missingBoth.description, 'Use a @user/user ID and @role/role ID bro.');
+
+  const missingLimit = await fixture.runEmbed(owner, `-setlimit ${fixture.addRole('330000000000000031').id}`);
+  assert.equal(missingLimit.title, 'Invalid command');
+  assert.equal(missingLimit.description, 'Add a whole number limit bro.');
+
+  const missingOriginal = await fixture.runEmbed(owner, '-alias add quick');
+  assert.equal(missingOriginal.title, 'Invalid command');
+  assert.equal(missingOriginal.description, 'Add the original command bro.');
+
+  const permissionDenial = await fixture.runEmbed(user, '-alias add nope foreverban');
+  assert.equal(permissionDenial.title, 'Unable to complete');
+  assert.match(permissionDenial.description, /Only OS or the Guild Owner/);
 });

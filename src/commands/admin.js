@@ -1,5 +1,7 @@
 const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
+const {
+  COLORS, embed, success, failure, argumentFailure, userArgumentFailure, roleArgumentFailure, mentionRole, mentionUser
+} = require('../utils/embeds');
 const { hasOwnerAccess, isOs, isOwnerOrOs } = require('../services/permissions');
 const { logEvent } = require('../services/eventLogger');
 const { listAllGuildMembers, membersWithRole, countMembersByRole } = require('../services/guildMembers');
@@ -124,7 +126,7 @@ async function setRole(message, args, db) {
       const roleId = target?.type === 'role' ? target.id : null;
       if (userId) db.removeOsUser(guildId, userId);
       else if (roleId === db.getSettings(guildId).os_role_id) db.setSetting(guildId, 'os_role_id', null);
-      else return message.reply({ embeds: [failure('Provide an OS user or the configured OS role to remove.')], allowedMentions: { parse: [] } });
+      else return message.reply({ embeds: [argumentFailure('Use the configured OS @user/user ID or @role/role ID bro.')], allowedMentions: { parse: [] } });
       await logEvent(message.guild, db, {
         event_type: 'OS ACCESS UPDATED', executor_id: message.author.id, affected_user_id: userId,
         role_id: roleId, reason: null, action_taken: 'OS access removed', punishment: null
@@ -144,7 +146,7 @@ async function setRole(message, args, db) {
     }
 
     const target = await getMember(message.guild, second);
-    if (!target || target.user.bot) return message.reply({ embeds: [failure('Mention a server member or role.')], allowedMentions: { parse: [] } });
+    if (!target || target.user.bot) return message.reply({ embeds: [argumentFailure('Use a @user/user ID or @role/role ID bro.')], allowedMentions: { parse: [] } });
     db.addOsUser(guildId, target.id);
     await logEvent(message.guild, db, {
       event_type: 'OS ACCESS UPDATED', executor_id: message.author.id, affected_user_id: target.id,
@@ -155,7 +157,7 @@ async function setRole(message, args, db) {
 
   if (first?.toLowerCase() === 'stripstaff') {
     const role = await getRole(message.guild, second);
-    if (!role) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+    if (!role) return message.reply({ embeds: [roleArgumentFailure()], allowedMentions: { parse: [] } });
     const roleId = role.id;
     db.setSetting(guildId, 'stripstaff_role_id', roleId);
     await logEvent(message.guild, db, {
@@ -169,17 +171,17 @@ async function setRole(message, args, db) {
     return configureLimitedRole(message, first, third, db);
   }
 
-  return message.reply({ embeds: [failure('Use `-setrole os @role`, `-setrole os @user`, `-setrole os remove @user`, `-setrole stripstaff @role`, or `-setlimit @role|ROLE_ID number`.')], allowedMentions: { parse: [] } });
+  return message.reply({ embeds: [argumentFailure('Add a valid role setup action bro.')], allowedMentions: { parse: [] } });
 }
 
 async function configureLimitedRole(message, roleValue, limitValue, db) {
   if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure role member limits.')], allowedMentions: { parse: [] } });
   const role = await getRole(message.guild, roleValue);
-  if (!role) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+  if (!role) return message.reply({ embeds: [roleArgumentFailure()], allowedMentions: { parse: [] } });
   const roleId = role.id;
   const limit = Number(limitValue);
   if (!Number.isSafeInteger(limit) || limit < 0) {
-    return message.reply({ embeds: [failure('The limit must be a whole number greater than or equal to zero. Use `-setlimit @role|ROLE_ID number`.')], allowedMentions: { parse: [] } });
+    return message.reply({ embeds: [argumentFailure('Add a whole number limit bro.')], allowedMentions: { parse: [] } });
   }
   let currentMembers;
   try {
@@ -212,7 +214,10 @@ async function configureLimitedRole(message, roleValue, limitValue, db) {
 
 async function setLimit(message, args, db) {
   if (!args[0] || args[1] === undefined) {
-    return message.reply({ embeds: [failure('Use `-setlimit @role|ROLE_ID number`.')], allowedMentions: { parse: [] } });
+    return message.reply({
+      embeds: [!args[0] ? roleArgumentFailure() : argumentFailure('Add a whole number limit bro.')],
+      allowedMentions: { parse: [] }
+    });
   }
   return configureLimitedRole(message, args[0], args[1], db);
 }
@@ -258,12 +263,12 @@ async function limitedRoles(message, db) {
 async function setLog(message, args, db) {
   if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure event logging.')], allowedMentions: { parse: [] } });
   const channelId = args[0]?.match(/^<#([0-9]+)>$/)?.[1] || args[0]?.match(/^[0-9]{17,20}$/)?.[0];
-  if (!channelId) return message.reply({ embeds: [failure('Use `-setlog #channel`.')], allowedMentions: { parse: [] } });
+  if (!channelId) return message.reply({ embeds: [argumentFailure('Use a #channel or channel ID bro.')], allowedMentions: { parse: [] } });
   let channel = message.guild.channels.cache.get(channelId);
   if (!channel && typeof message.guild.channels.fetch === 'function') {
     channel = await message.guild.channels.fetch(channelId).catch(() => null);
   }
-  if (!channel?.isTextBased() || !channel.send) return message.reply({ embeds: [failure('That is not a usable text channel.')], allowedMentions: { parse: [] } });
+  if (!channel?.isTextBased() || !channel.send) return message.reply({ embeds: [argumentFailure('Use a valid text channel bro.')], allowedMentions: { parse: [] } });
   db.setSetting(message.guild.id, 'log_channel_id', channelId);
   await logEvent(message.guild, db, {
     event_type: 'EVENT LOGGING CONFIGURED', executor_id: message.author.id, affected_user_id: null,
@@ -287,7 +292,7 @@ async function blacklist(message, args, db) {
   }
 
   const target = await getMember(message.guild, targetText);
-  if (!target || target.user.bot) return message.reply({ embeds: [failure('Mention a server member.')], allowedMentions: { parse: [] } });
+  if (!target || target.user.bot) return message.reply({ embeds: [userArgumentFailure()], allowedMentions: { parse: [] } });
   if (action?.toLowerCase() === 'add') {
     db.addBlacklist(message.guild.id, target.id, message.author.id, new Date().toISOString());
     await logEvent(message.guild, db, {
@@ -304,7 +309,7 @@ async function blacklist(message, args, db) {
     });
     return message.reply({ embeds: [success(`${mentionUser(target.id)} was removed from the blacklist.`)], allowedMentions: { parse: [] } });
   }
-  return message.reply({ embeds: [failure('Use `-vouchblacklist add @user`, `remove @user`, or `list [page]`.')], allowedMentions: { parse: [] } });
+  return message.reply({ embeds: [argumentFailure('Use `add`, `remove`, or `list` bro.')], allowedMentions: { parse: [] } });
 }
 
 module.exports = { setRole, setLimit, limitedRoles, setLog, setupVouchLogs, blacklist };

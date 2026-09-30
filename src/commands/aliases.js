@@ -1,4 +1,4 @@
-const { embed, success, failure } = require('../utils/embeds');
+const { embed, success, failure, argumentFailure } = require('../utils/embeds');
 const { isOwnerOrOs } = require('../services/permissions');
 const { logEvent } = require('../services/eventLogger');
 
@@ -32,11 +32,11 @@ async function execute(message, args, db, options) {
 
   const shortcut = normalizeShortcut(args[1]);
   if (!SHORTCUT_PATTERN.test(shortcut)) {
-    return reply(message, { embeds: [failure('Alias shortcuts must be 1-32 lowercase letters, numbers, underscores, or hyphens.')] });
+    return reply(message, { embeds: [argumentFailure('Add a valid shortcut bro.')] });
   }
   if (action === 'remove') {
     const removed = db.removeCommandAlias(message.guild.id, shortcut).changes > 0;
-    if (!removed) return reply(message, { embeds: [failure('That custom alias does not exist.')] });
+    if (!removed) return reply(message, { embeds: [argumentFailure('Use an existing custom alias bro.')] });
     await logEvent(message.guild, db, {
       event_type: 'COMMAND ALIAS UPDATED',
       executor_id: message.author.id,
@@ -50,15 +50,16 @@ async function execute(message, args, db, options) {
   }
 
   if (action !== 'add') {
-    return reply(message, { embeds: [failure('Use `-alias add shortcut original command`, `-alias remove shortcut`, or `-alias list`.')] });
+    return reply(message, { embeds: [argumentFailure('Use `add`, `remove`, or `list` bro.')] });
   }
   if (options.handlers.has(shortcut) || options.defaultAliases.has(shortcut)) {
-    return reply(message, { embeds: [failure('That shortcut conflicts with an existing command or default alias.')] });
+    return reply(message, { embeds: [argumentFailure('That shortcut is already reserved bro.')] });
   }
 
   const command = args.slice(2).join(' ').trim().toLowerCase();
+  if (!command) return reply(message, { embeds: [argumentFailure('Add the original command bro.')] });
   if (!validateCommand(command, options.handlers)) {
-    return reply(message, { embeds: [failure('The original command must be an existing command without the prefix, and cannot be another alias.')] });
+    return reply(message, { embeds: [argumentFailure('Use an existing original command bro.')] });
   }
   db.setCommandAlias(message.guild.id, shortcut, command, message.author.id);
   await logEvent(message.guild, db, {
