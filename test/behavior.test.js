@@ -709,9 +709,9 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
   assert.equal(remainingVouches(guild.id, newGiver.id, db), 1);
   assert.deepEqual([...handlers.keys()].sort(), [
     'alias', 'forcemanage', 'forcenickname', 'forcerolestrip', 'forcestrip', 'foreverban', 'foreverbanlist', 'fp',
-    'limitedroles', 'lockrole', 'lockroles', 'rolestrip', 'setlimit', 'setlog', 'setrole', 'unforcenickname',
-    'unforcerolestrip', 'unforcestrip', 'unforeverban', 'unlockrole', 'vouch', 'vouchblacklist',
-    'vouchcommands', 'vouchhelp', 'vouchlogsetup'
+    'limitedroles', 'lockrole', 'lockroles', 'paid', 'paidlist', 'rolestrip', 'setlimit', 'setlog', 'setpaidrole',
+    'setrole', 'setverifiedrole', 'unforcenickname', 'unforcerolestrip', 'unforcestrip', 'unforeverban',
+    'unlockrole', 'vouch', 'vouchblacklist', 'vouchcommands', 'vouchhelp', 'vouchlogsetup'
   ]);
 
   const helpDashboard = require('../src/commands/vouchCommands');

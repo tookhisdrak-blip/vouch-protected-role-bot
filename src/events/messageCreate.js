@@ -7,6 +7,7 @@ const vouchCommands = require('../commands/vouchCommands');
 const fakePermissions = require('../commands/fakePermissions');
 const aliases = require('../commands/aliases');
 const roleLocks = require('../commands/roleLocks');
+const paidRoles = require('../commands/paidRoles');
 
 const defaultAliases = new Map([
   ['vg', ['vouch', 'give']],
@@ -38,7 +39,11 @@ const handlers = new Map([
   ['alias', (message, args, db) => aliases.execute(message, args, db, { handlers, defaultAliases })],
   ['lockrole', (message, args, db) => roleLocks.lockRole(message, args, db)],
   ['unlockrole', (message, args, db) => roleLocks.unlockRole(message, args, db)],
-  ['lockroles', (message, _args, db) => roleLocks.listRoleLocks(message, db)]
+  ['lockroles', (message, _args, db) => roleLocks.listRoleLocks(message, db)],
+  ['setpaidrole', (message, args, db) => paidRoles.setPaidRole(message, args, db)],
+  ['paid', (message, args, db) => paidRoles.whitelistPaidUser(message, args, db)],
+  ['paidlist', (message, _args, db) => paidRoles.listPaidConfiguration(message, db)],
+  ['setverifiedrole', (message, args, db) => paidRoles.setVerifiedRole(message, args, db)]
 ]);
 
 function resolveCommand(guildId, commandName, args, db) {

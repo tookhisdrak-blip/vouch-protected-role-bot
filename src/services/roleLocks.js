@@ -1,13 +1,52 @@
 const { AuditLogEvent } = require('discord.js');
 const { isOs } = require('./permissions');
-const {
-  removeRoleDetailed, applyStripstaff, stripstaffPunishmentText
-} = require('./roleProtection');
+const { applyStripstaff, stripstaffPunishmentText } = require('./roleProtection');
 const { logEvent } = require('./eventLogger');
 const { withDiscordRetry } = require('./discordRetry');
 
 const auditDelay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const reversalLocks = new Set();
+const activeEnforcements = new Set();
+const roleOperationQueues = new Map();
+const expectedReversals = new Map();
+const processedIncidents = new Set();
+const REVERSAL_MARKER_TTL_MS = 30_000;
+const ROLE_OPERATION_ATTEMPTS = 8;
+const ROLE_OPERATION_MAX_WAIT_MS = 5 * 60_000;
+
+function roleOperationKey(guildId, memberId, roleId) {
+  return `${guildId}:${memberId}:${roleId}`;
+}
+
+function roleState(member, roleId) {
+  return member.roles.cache.has(roleId);
+}
+
+function markExpectedReversal(key, desiredState) {
+  expectedReversals.set(key, { desiredState, pending: true, expiresAt: null });
+}
+
+function finalizeExpectedReversal(key, desiredState) {
+  const marker = expectedReversals.get(key);
+  if (marker?.desiredState !== desiredState) return;
+  marker.pending = false;
+  marker.expiresAt = Date.now() + REVERSAL_MARKER_TTL_MS;
+}
+
+function clearExpectedReversal(key, desiredState) {
+  const marker = expectedReversals.get(key);
+  if (marker?.desiredState === desiredState) expectedReversals.delete(key);
+}
+
+function consumeExpectedReversal(key, observedState) {
+  const marker = expectedReversals.get(key);
+  if (!marker) return false;
+  if (!marker.pending && marker.expiresAt < Date.now()) {
+    expectedReversals.delete(key);
+    return false;
+  }
+  expectedReversals.delete(key);
+  return marker.desiredState === observedState;
+}
 
 function auditEntryHasChange(entry, roleId, changeType) {
   const key = changeType === 'add' ? '$add' : '$remove';
@@ -66,10 +105,28 @@ function executorAuthorized(executorMember, executor, guild, authorizationRoleId
 async function verifyMemberRoleState(member, roleId, expected) {
   let refreshed = null;
   try {
-    refreshed = await member.guild.members.fetch({ user: member.id, force: true });
+    refreshed = await withDiscordRetry(
+      () => member.guild.members.fetch({ user: member.id, force: true }),
+      {
+        label: `Verifying role ${roleId} for ${member.id}`,
+        attempts: ROLE_OPERATION_ATTEMPTS,
+        maxWaitMs: ROLE_OPERATION_MAX_WAIT_MS
+      }
+    );
     if (!refreshed) refreshed = await member.guild.members.fetch(member.id);
   } catch (error) {
-    return { verified: false, error };
+    try {
+      refreshed = await withDiscordRetry(
+        () => member.guild.members.fetch(member.id),
+        {
+          label: `Verifying role ${roleId} for ${member.id}`,
+          attempts: ROLE_OPERATION_ATTEMPTS,
+          maxWaitMs: ROLE_OPERATION_MAX_WAIT_MS
+        }
+      );
+    } catch (fallbackError) {
+      return { verified: false, error: fallbackError || error };
+    }
   }
   if (!refreshed) return { verified: false, error: new Error('Discord did not return the updated member') };
   const actual = refreshed.roles.cache.has(roleId);
@@ -79,36 +136,76 @@ async function verifyMemberRoleState(member, roleId, expected) {
   };
 }
 
-async function reverseRoleChange(member, roleId, changeType) {
-  const reason = `Unauthorized locked-role ${changeType === 'add' ? 'addition' : 'removal'}`;
-  if (changeType === 'add') {
-    const result = await removeRoleDetailed(member, roleId, reason);
-    const verification = await verifyMemberRoleState(member, roleId, false);
-    if (verification.verified) return { success: true, action: 'Unauthorized role addition reversed and verified' };
-    return {
-      success: false,
-      action: 'Unauthorized role addition reversal failed verification',
-      error: result.error || verification.error || new Error(`Role removal ended with status ${result.status}`)
-    };
+async function performRoleReversal(member, roleId, desiredState, reason) {
+  const key = roleOperationKey(member.guild.id, member.id, roleId);
+  if (roleState(member, roleId) === desiredState) {
+    return verifyMemberRoleState(member, roleId, desiredState);
   }
 
+  markExpectedReversal(key, desiredState);
   try {
-    await withDiscordRetry(() => member.roles.add(roleId, reason), {
-      label: `Restoring locked role ${roleId} to ${member.id}`,
-      shouldContinue: () => !member.roles.cache.has(roleId)
+    await withDiscordRetry(async () => {
+      if (roleState(member, roleId) === desiredState) return;
+      if (desiredState) await member.roles.add(roleId, reason);
+      else await member.roles.remove(roleId, reason);
+    }, {
+      label: `${desiredState ? 'Restoring' : 'Removing'} locked role ${roleId} for ${member.id}`,
+      attempts: ROLE_OPERATION_ATTEMPTS,
+      maxWaitMs: ROLE_OPERATION_MAX_WAIT_MS,
+      shouldContinue: () => roleState(member, roleId) !== desiredState
     });
   } catch (error) {
-    return { success: false, action: 'Unauthorized role removal reversal failed', error };
+    const verification = await verifyMemberRoleState(member, roleId, desiredState);
+    if (verification.verified) {
+      finalizeExpectedReversal(key, desiredState);
+      return verification;
+    }
+    clearExpectedReversal(key, desiredState);
+    return { verified: false, error };
   }
-  const verification = await verifyMemberRoleState(member, roleId, true);
+
+  finalizeExpectedReversal(key, desiredState);
+  const verification = await verifyMemberRoleState(member, roleId, desiredState);
+  if (!verification.verified) clearExpectedReversal(key, desiredState);
+  return verification;
+}
+
+function queueRoleReversal(member, roleId, desiredState, reason) {
+  const key = roleOperationKey(member.guild.id, member.id, roleId);
+  let queue = roleOperationQueues.get(key);
+  if (!queue) {
+    queue = { tail: Promise.resolve(), pending: new Map() };
+    roleOperationQueues.set(key, queue);
+  }
+  if (queue.pending.has(desiredState)) return queue.pending.get(desiredState);
+
+  const operation = queue.tail
+    .catch(() => undefined)
+    .then(() => performRoleReversal(member, roleId, desiredState, reason));
+  queue.pending.set(desiredState, operation);
+  const tail = operation.finally(() => {
+    if (queue.pending.get(desiredState) === operation) queue.pending.delete(desiredState);
+    if (!queue.pending.size && queue.tail === tail) roleOperationQueues.delete(key);
+  });
+  queue.tail = tail;
+  return operation;
+}
+
+async function reverseRoleChange(member, roleId, changeType) {
+  const reason = `Unauthorized locked-role ${changeType === 'add' ? 'addition' : 'removal'}`;
+  const desiredState = changeType === 'remove';
+  const verification = await queueRoleReversal(member, roleId, desiredState, reason);
   if (!verification.verified) {
     return {
       success: false,
-      action: 'Unauthorized role removal reversal failed verification',
-      error: verification.error || new Error('Discord did not confirm that the role was restored')
+      action: `Unauthorized role ${changeType === 'add' ? 'addition' : 'removal'} reversal failed verification`,
+      error: verification.error || new Error(`Discord did not confirm that the role was ${desiredState ? 'restored' : 'removed'}`)
     };
   }
-  return { success: true, action: 'Unauthorized role removal reversed and verified' };
+  return {
+    success: true,
+    action: `Unauthorized role ${changeType === 'add' ? 'addition' : 'removal'} reversed and verified`
+  };
 }
 
 function attributionReason(status, executor) {
@@ -120,19 +217,25 @@ function attributionReason(status, executor) {
 }
 
 async function enforceLockedRoleChange(member, roleId, changeType, db) {
-  const key = `${member.guild.id}:${member.id}:${roleId}:${changeType}`;
-  if (reversalLocks.has(key)) return false;
-  reversalLocks.add(key);
+  const enforcementKey = `${roleOperationKey(member.guild.id, member.id, roleId)}:${changeType}`;
+  if (activeEnforcements.has(enforcementKey)) return true;
+  activeEnforcements.add(enforcementKey);
   try {
     const lock = db.getRoleLock(member.guild.id, roleId);
     if (!lock) return false;
-    if (changeType === 'add' && !member.roles.cache.has(roleId)) return false;
-    if (changeType === 'remove' && member.roles.cache.has(roleId)) return false;
+    if (changeType === 'add' && !member.roles.cache.has(roleId)) return true;
+    if (changeType === 'remove' && member.roles.cache.has(roleId)) return true;
 
     const audit = await findRoleChangeExecutor(member.guild, member.id, roleId, changeType);
     const executor = audit.entry?.executor || null;
+    const incidentKey = audit.entry?.id ? `${audit.entry.id}:${roleId}:${changeType}` : null;
+    if (incidentKey && processedIncidents.has(incidentKey)) return true;
+    if (incidentKey) {
+      processedIncidents.add(incidentKey);
+      if (processedIncidents.size > 2000) processedIncidents.clear();
+    }
     const executorMember = await fetchExecutorMember(member.guild, executor);
-    if (executorAuthorized(executorMember, executor, member.guild, lock.authorization_role_ids, db)) return true;
+    if (executorAuthorized(executorMember, executor, member.guild, lock.authorization_role_ids, db)) return false;
 
     const reversal = await reverseRoleChange(member, roleId, changeType);
     let punishment = { status: 'unverified' };
@@ -157,27 +260,47 @@ async function enforceLockedRoleChange(member, roleId, changeType, db) {
     });
     return true;
   } finally {
-    reversalLocks.delete(key);
+    activeEnforcements.delete(enforcementKey);
   }
 }
 
 async function handleRoleLockUpdate(oldMember, newMember, db) {
+  const handledRoleIds = new Set();
   const locks = new Set(db.getRoleLocks(newMember.guild.id).map((lock) => lock.locked_role_id));
-  if (!locks.size) return;
+  if (!locks.size) return handledRoleIds;
   const roleIds = new Set([...oldMember.roles.cache.keys(), ...newMember.roles.cache.keys()]);
   for (const roleId of roleIds) {
     if (!locks.has(roleId)) continue;
     const hadRole = oldMember.roles.cache.has(roleId);
     const hasRole = newMember.roles.cache.has(roleId);
     if (hadRole === hasRole) continue;
-    await enforceLockedRoleChange(newMember, roleId, hasRole ? 'add' : 'remove', db);
+    const key = roleOperationKey(newMember.guild.id, newMember.id, roleId);
+    if (consumeExpectedReversal(key, hasRole)) {
+      handledRoleIds.add(roleId);
+      continue;
+    }
+    if (await enforceLockedRoleChange(newMember, roleId, hasRole ? 'add' : 'remove', db)) {
+      handledRoleIds.add(roleId);
+    }
   }
+  return handledRoleIds;
+}
+
+function clearRoleLockEnforcementState() {
+  activeEnforcements.clear();
+  roleOperationQueues.clear();
+  expectedReversals.clear();
+  processedIncidents.clear();
 }
 
 module.exports = {
   auditEntryHasChange,
   findRoleChangeExecutor,
+  roleOperationKey,
+  consumeExpectedReversal,
+  queueRoleReversal,
   reverseRoleChange,
   enforceLockedRoleChange,
-  handleRoleLockUpdate
+  handleRoleLockUpdate,
+  clearRoleLockEnforcementState
 };

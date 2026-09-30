@@ -286,7 +286,7 @@ async function reconcileVouchRole(guild, db, reason = 'Vouch role reconciliation
   return { cleanupFailures, memberFetchFailed };
 }
 
-async function handleGuildMemberUpdate(oldMember, newMember, db) {
+async function handleGuildMemberUpdate(oldMember, newMember, db, ignoredRoleIds = new Set()) {
   const handledRoleIds = new Set();
   const guildId = newMember.guild.id;
   const settings = db.getSettings(guildId);
@@ -298,6 +298,7 @@ async function handleGuildMemberUpdate(oldMember, newMember, db) {
 
   const limitedRoles = new Map(db.getLimitedRoles(guildId).map((row) => [row.role_id, row.member_limit]));
   for (const roleId of addedRoleIds) {
+    if (ignoredRoleIds.has(roleId)) continue;
     const limit = limitedRoles.get(roleId);
     if (limit !== undefined && newMember.guild.roles.cache.get(roleId)?.members.size > limit) {
       const handled = await enforceViolation(newMember, roleId, {
@@ -308,8 +309,10 @@ async function handleGuildMemberUpdate(oldMember, newMember, db) {
       if (handled) handledRoleIds.add(roleId);
     }
   }
-  if (await enforceVouchRoleState(newMember, db)) handledRoleIds.add(settings.vouch_role_id);
-  else if (await restoreRemovedVouchRole(oldMember, newMember, db)) handledRoleIds.add(settings.vouch_role_id);
+  if (!ignoredRoleIds.has(settings.vouch_role_id)) {
+    if (await enforceVouchRoleState(newMember, db)) handledRoleIds.add(settings.vouch_role_id);
+    else if (await restoreRemovedVouchRole(oldMember, newMember, db)) handledRoleIds.add(settings.vouch_role_id);
+  }
   return handledRoleIds;
 }
 

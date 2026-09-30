@@ -6,7 +6,8 @@ const path = require('node:path');
 const { Collection, PermissionFlagsBits } = require('discord.js');
 const { createDatabase } = require('../src/database');
 const { handleMessageCreate, handlers } = require('../src/events/messageCreate');
-const { handleRoleLockUpdate } = require('../src/services/roleLocks');
+const { handleMemberUpdate } = require('../src/events/guildMemberUpdate');
+const { handleRoleLockUpdate, clearRoleLockEnforcementState } = require('../src/services/roleLocks');
 const dashboard = require('../src/commands/vouchCommands');
 const { catalog } = require('../src/commands/help');
 
@@ -17,6 +18,8 @@ const AUTH_OS = '300000000000000001';
 const AUTH_STAFF = '300000000000000002';
 const AUTH_THIRD = '300000000000000003';
 const STAFF_PERMISSION = '400000000000000001';
+
+test.beforeEach(() => clearRoleLockEnforcementState());
 
 function createFixture(guildId = '500000000000000001', databasePath = ':memory:') {
   const db = createDatabase(databasePath);
@@ -50,16 +53,20 @@ function createFixture(guildId = '500000000000000001', databasePath = ':memory:'
   }
 
   function addMember(id, roleIds = [], bot = false) {
+    const calls = { add: [], remove: [] };
     const member = {
       id,
       guild,
+      calls,
       user: { id, bot, username: id, tag: `${id}#0001` },
       roles: {
         cache: new Collection(),
         async add(roleId) {
+          calls.add.push(roleId);
           member.roles.cache.set(roleId, guild.roles.cache.get(roleId) || { id: roleId });
         },
         async remove(roleId) {
+          calls.remove.push(roleId);
           member.roles.cache.delete(roleId);
         }
       }
@@ -179,6 +186,7 @@ test('unauthorized additions are removed and unauthorized removals are restored 
   assert.equal(target.roles.cache.has(LOCKED_A), false);
   assert.equal(additionExecutor.roles.cache.has(STAFF_PERMISSION), false);
 
+  clearRoleLockEnforcementState();
   target.roles.cache.set(LOCKED_A, fixture.guild.roles.cache.get(LOCKED_A));
   const removalExecutor = fixture.addMember('600000000000000022', [STAFF_PERMISSION]);
   await applyChange(fixture, removalExecutor, target, LOCKED_A, 'remove');
@@ -190,6 +198,58 @@ test('unauthorized additions are removed and unauthorized removals are restored 
   assert.match(logs[1].action_taken, /reversed and verified/);
   assert.equal(logs[0].punishment, 'STRIPSTAFF removed');
   assert.equal(logs[1].punishment, 'STRIPSTAFF removed');
+});
+
+test('rapid duplicate unauthorized events perform one reversal and one punishment', async (t) => {
+  const fixture = createFixture('500000000000000015');
+  t.after(() => fixture.db.close());
+  fixture.db.setRoleLock(fixture.guild.id, LOCKED_A, [AUTH_OS], OWNER_ID);
+  const target = fixture.addMember('600000000000000100', [LOCKED_A]);
+  const executor = fixture.addMember('600000000000000101', [STAFF_PERMISSION]);
+  const oldMember = fixture.snapshot(target, []);
+  fixture.setAudit(target.id, [LOCKED_A], executor.user, 'add');
+
+  await Promise.all(Array.from({ length: 12 }, () =>
+    handleRoleLockUpdate(oldMember, target, fixture.db)));
+
+  assert.equal(target.calls.remove.length, 1);
+  assert.equal(executor.calls.remove.length, 1);
+  assert.equal(target.roles.cache.has(LOCKED_A), false);
+  assert.equal(executor.roles.cache.has(STAFF_PERMISSION), false);
+  assert.equal(fixture.db.connection.prepare('SELECT COUNT(*) AS count FROM event_logs').get().count, 1);
+});
+
+test('the bot own reversal update is consumed without toggling or duplicate punishment', async (t) => {
+  const fixture = createFixture('500000000000000016');
+  t.after(() => fixture.db.close());
+  fixture.db.setRoleLock(fixture.guild.id, LOCKED_A, [AUTH_OS], OWNER_ID);
+  const target = fixture.addMember('600000000000000110', [LOCKED_A]);
+  const executor = fixture.addMember('600000000000000111', [STAFF_PERMISSION]);
+  const externalOldMember = fixture.snapshot(target, []);
+  fixture.setAudit(target.id, [LOCKED_A], executor.user, 'add');
+  let selfUpdateCount = 0;
+  target.roles.remove = async (roleId) => {
+    target.calls.remove.push(roleId);
+    const reversalOldMember = fixture.snapshot(target, [roleId]);
+    target.roles.cache.delete(roleId);
+    selfUpdateCount += 1;
+    const realNow = Date.now;
+    Date.now = () => realNow() + 60_000;
+    try {
+      await handleMemberUpdate(reversalOldMember, target, fixture.db);
+    } finally {
+      Date.now = realNow;
+    }
+  };
+
+  await handleMemberUpdate(externalOldMember, target, fixture.db);
+
+  assert.equal(selfUpdateCount, 1);
+  assert.equal(target.calls.remove.length, 1);
+  assert.equal(target.calls.add.length, 0);
+  assert.equal(target.roles.cache.has(LOCKED_A), false);
+  assert.equal(executor.calls.remove.length, 1);
+  assert.equal(fixture.db.connection.prepare('SELECT COUNT(*) AS count FROM event_logs').get().count, 1);
 });
 
 test('Guild Owner and configured OS are fully exempt from role locks', async (t) => {
@@ -221,6 +281,7 @@ test('bot additions and removals are reversed but bots are never punished', asyn
   await applyChange(fixture, bot, target, LOCKED_A, 'add');
   assert.equal(target.roles.cache.has(LOCKED_A), false);
   assert.equal(bot.roles.cache.has(STAFF_PERMISSION), true);
+  clearRoleLockEnforcementState();
   target.roles.cache.set(LOCKED_A, fixture.guild.roles.cache.get(LOCKED_A));
   await applyChange(fixture, bot, target, LOCKED_A, 'remove');
   assert.equal(target.roles.cache.has(LOCKED_A), true);

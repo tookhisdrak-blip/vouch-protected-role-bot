@@ -7,6 +7,8 @@ const {
   isTransientDiscordError, retryAfterMs
 } = require('../src/services/discordRetry');
 const { handleGuildMemberUpdate, applyStripstaff, reconcileVouchRole } = require('../src/services/roleProtection');
+const { handleRoleLockUpdate, clearRoleLockEnforcementState } = require('../src/services/roleLocks');
+const { handlePaidRoleUpdate, clearPaidRoleEnforcementState } = require('../src/services/paidRoles');
 const { handleMessageCreate } = require('../src/events/messageCreate');
 const { runGlobalRoleStrip } = require('../src/services/forceRules');
 
@@ -18,6 +20,8 @@ test.beforeEach(() => {
   sleeps.length = 0;
   queued.length = 0;
   clearDeferredRetries();
+  clearRoleLockEnforcementState();
+  clearPaidRoleEnforcementState();
   configureRetryTiming({
     sleep: async (ms) => { sleeps.push(ms); },
     schedule: (callback, ms) => { const task = { callback, ms }; queued.push(task); return task; },
@@ -154,6 +158,62 @@ test('withDiscordRetry waits for retry_after and does not treat a rate limit as 
   let permanentCalls = 0;
   await assert.rejects(withDiscordRetry(async () => { permanentCalls += 1; throw missingPermissions(); }), /Missing Permissions/);
   assert.equal(permanentCalls, 1, 'permanent errors are not retried');
+});
+
+test('LockRole queues one reversal, respects retry_after, then punishes once', async (t) => {
+  const { db, guild, addRole, addMember } = createFixture('220000000000000010');
+  t.after(() => db.close());
+  const lockedRole = '320000000000000010';
+  const authorizationRole = '320000000000000011';
+  const staffRole = '320000000000000012';
+  addRole(lockedRole);
+  addRole(authorizationRole);
+  addRole(staffRole, [PermissionFlagsBits.ManageRoles]);
+  db.setRoleLock(guild.id, lockedRole, [authorizationRole], OWNER_ID);
+  const executor = addMember('420000000000000010', [staffRole]);
+  const target = addMember('420000000000000011', [lockedRole], {
+    remove: { [lockedRole]: [rateLimit(1250), rateLimit(1250)] }
+  });
+  auditAdd(guild, target, executor, lockedRole);
+  const oldMember = { ...target, roles: { cache: new Collection() } };
+
+  await Promise.all(Array.from({ length: 10 }, () =>
+    handleRoleLockUpdate(oldMember, target, db)));
+
+  assert.equal(target.calls.remove.length, 3, 'two rate limits and one successful removal');
+  assert.equal(sleeps.length, 2);
+  assert.ok(sleeps.every((ms) => ms >= 1250 && ms < 1500));
+  assert.equal(target.roles.cache.has(lockedRole), false);
+  assert.equal(executor.calls.remove.length, 1, 'executor is punished only once');
+  assert.equal(db.connection.prepare('SELECT COUNT(*) AS count FROM event_logs').get().count, 1);
+});
+
+test('paid-role enforcement shares the queue, respects retry_after, and punishes once', async (t) => {
+  const { db, guild, addRole, addMember } = createFixture('220000000000000011');
+  t.after(() => db.close());
+  const paidRole = '320000000000000020';
+  const staffRole = '320000000000000021';
+  addRole(paidRole);
+  addRole(staffRole, [PermissionFlagsBits.ManageRoles]);
+  db.addPaidRole(guild.id, paidRole, OWNER_ID);
+  const executor = addMember('420000000000000020', [staffRole]);
+  const target = addMember('420000000000000021', [paidRole], {
+    remove: { [paidRole]: [rateLimit(1750), rateLimit(1750)] }
+  });
+  auditAdd(guild, target, executor, paidRole);
+  const oldMember = { ...target, roles: { cache: new Collection() } };
+
+  await Promise.all(Array.from({ length: 10 }, () =>
+    handlePaidRoleUpdate(oldMember, target, db)));
+
+  assert.equal(target.calls.remove.length, 3, 'two rate limits and one successful removal');
+  assert.equal(sleeps.length, 2);
+  assert.ok(sleeps.every((ms) => ms >= 1750 && ms < 2000));
+  assert.equal(target.roles.cache.has(paidRole), false);
+  assert.equal(executor.calls.remove.length, 1);
+  const log = db.connection.prepare("SELECT * FROM event_logs WHERE event_type = 'PAID ROLE VIOLATION'").get();
+  assert.equal(log.action_taken, 'Unauthorized paid role removed and verified');
+  assert.equal(log.punishment, 'STRIPSTAFF removed');
 });
 
 test('unauthorized vouch-role removal is retried after a rate limit and the executor is still punished', async (t) => {

@@ -1,5 +1,6 @@
 const { hasFakePermission } = require('../services/fakePermissions');
 const { isGuildOwner, hasOwnerAccess, isOwnerOrOs, hasVouchAdminAccess, isVouchGiver, isForceManager } = require('../services/permissions');
+const { canManagePaidWhitelist } = require('../services/paidRoles');
 
 const catalog = [
   { command: '-vouch give @user [reason]', summary: 'Give an active vouch within your allowance. Givers default to 2 active vouches, Vouch Admins and OS to 5; the Guild Owner and Owner Allow users are uncapped unless given a limit.', category: 'Vouch', permission: 'giver' },
@@ -16,6 +17,10 @@ const catalog = [
   { command: '-lockrole @role to @role, @role', summary: 'Lock manual role changes to members who hold any configured authorization role.', category: 'Role Locks', permission: 'os' },
   { command: '-unlockrole @role', summary: 'Remove a manual role-change lock.', category: 'Role Locks', permission: 'os' },
   { command: '-lockroles', summary: 'Show every locked role and all roles authorized to manage it.', category: 'Role Locks', permission: 'everyone' },
+  { command: '-setpaidrole @role', summary: 'Add a role to the shared paid-role whitelist protection.', category: 'Paid Roles', permission: 'os' },
+  { command: '-paid @user', summary: 'Whitelist a member to receive and keep every configured paid role.', category: 'Paid Roles', permission: 'paid' },
+  { command: '-paidlist', summary: 'Show paid roles, whitelisted users, and verified whitelist managers.', category: 'Paid Roles', permission: 'everyone' },
+  { command: '-setverifiedrole @role|@user', summary: 'Set the verified role or add a verified user allowed to use -paid.', category: 'Paid Roles', permission: 'os' },
   { command: '-setrole stripstaff @role', summary: 'Optional legacy setting. STRIPSTAFF runs automatically without it by removing only staff-permission roles.', category: 'Vouch Administration', permission: 'owner' },
   { command: '-setrole os @role', summary: 'Configure the OS role.', category: 'Vouch Administration', permission: 'owner' },
   { command: '-setrole os @user', summary: 'Grant OS access to a user.', category: 'Vouch Administration', permission: 'owner' },
@@ -69,6 +74,7 @@ function allowed(item, member, db) {
   if (item.permission === 'fakeban') return hasFakePermission(member, db, 'ban_members');
   if (item.permission === 'admin') return hasVouchAdminAccess(member, db);
   if (item.permission === 'force') return isForceManager(member, db);
+  if (item.permission === 'paid') return canManagePaidWhitelist(member, db);
   if (item.permission === 'giver') return hasVouchAdminAccess(member, db) || isVouchGiver(member, db);
   // Mirrors takeVouch: original givers keep removal rights even after giver access is removed.
   if (item.permission === 'taker') return hasVouchAdminAccess(member, db) || isVouchGiver(member, db) || db.countGiverVouches(member.guild.id, member.id) > 0;

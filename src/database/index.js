@@ -178,6 +178,33 @@ function createDatabase(databasePath) {
       FOREIGN KEY (guild_id, locked_role_id)
         REFERENCES role_locks (guild_id, locked_role_id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS paid_roles (
+      guild_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, role_id)
+    );
+    CREATE TABLE IF NOT EXISTS paid_role_whitelist (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS paid_verified_config (
+      guild_id TEXT PRIMARY KEY,
+      role_id TEXT,
+      updated_by TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS paid_verified_users (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    );
     CREATE INDEX IF NOT EXISTS forced_role_strips_target
       ON forced_role_strips (guild_id, user_id);
     CREATE INDEX IF NOT EXISTS forever_bans_user
@@ -350,6 +377,37 @@ function createDatabase(databasePath) {
       VALUES (?, ?, ?)
     `),
     removeRoleLock: connection.prepare('DELETE FROM role_locks WHERE guild_id = ? AND locked_role_id = ?'),
+    addPaidRole: connection.prepare(`
+      INSERT OR IGNORE INTO paid_roles (guild_id, role_id, added_by, created_at)
+      VALUES (?, ?, ?, ?)
+    `),
+    getPaidRoles: connection.prepare('SELECT role_id, added_by, created_at FROM paid_roles WHERE guild_id = ? ORDER BY created_at, role_id'),
+    isPaidRole: connection.prepare('SELECT 1 FROM paid_roles WHERE guild_id = ? AND role_id = ?'),
+    addPaidWhitelistUser: connection.prepare(`
+      INSERT OR IGNORE INTO paid_role_whitelist (guild_id, user_id, added_by, created_at)
+      VALUES (?, ?, ?, ?)
+    `),
+    getPaidWhitelistUsers: connection.prepare(
+      'SELECT user_id, added_by, created_at FROM paid_role_whitelist WHERE guild_id = ? ORDER BY created_at, user_id'
+    ),
+    isPaidWhitelisted: connection.prepare('SELECT 1 FROM paid_role_whitelist WHERE guild_id = ? AND user_id = ?'),
+    setPaidVerifiedRole: connection.prepare(`
+      INSERT INTO paid_verified_config (guild_id, role_id, updated_by, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        role_id = excluded.role_id,
+        updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at
+    `),
+    getPaidVerifiedRole: connection.prepare('SELECT role_id FROM paid_verified_config WHERE guild_id = ?'),
+    addPaidVerifiedUser: connection.prepare(`
+      INSERT OR IGNORE INTO paid_verified_users (guild_id, user_id, added_by, created_at)
+      VALUES (?, ?, ?, ?)
+    `),
+    getPaidVerifiedUsers: connection.prepare(
+      'SELECT user_id, added_by, created_at FROM paid_verified_users WHERE guild_id = ? ORDER BY created_at, user_id'
+    ),
+    isPaidVerifiedUser: connection.prepare('SELECT 1 FROM paid_verified_users WHERE guild_id = ? AND user_id = ?'),
     addForceManagementLog: connection.prepare(`
       INSERT INTO force_management_logs
         (guild_id, action, target_user_id, role_id, nickname, executor_id, result, reason, punishment, failure_reason, attribution_status, created_at)
@@ -490,6 +548,21 @@ function createDatabase(databasePath) {
       setRoleLockTransaction(guildId, lockedRoleId, [...new Set(authorizationRoleIds)], updatedBy, now);
     },
     removeRoleLock: (guildId, lockedRoleId) => statements.removeRoleLock.run(guildId, lockedRoleId),
+    addPaidRole: (guildId, roleId, addedBy, createdAt = new Date().toISOString()) =>
+      statements.addPaidRole.run(guildId, roleId, addedBy, createdAt),
+    getPaidRoles: (guildId) => statements.getPaidRoles.all(guildId),
+    isPaidRole: (guildId, roleId) => Boolean(statements.isPaidRole.get(guildId, roleId)),
+    addPaidWhitelistUser: (guildId, userId, addedBy, createdAt = new Date().toISOString()) =>
+      statements.addPaidWhitelistUser.run(guildId, userId, addedBy, createdAt),
+    getPaidWhitelistUsers: (guildId) => statements.getPaidWhitelistUsers.all(guildId),
+    isPaidWhitelisted: (guildId, userId) => Boolean(statements.isPaidWhitelisted.get(guildId, userId)),
+    setPaidVerifiedRole: (guildId, roleId, updatedBy, updatedAt = new Date().toISOString()) =>
+      statements.setPaidVerifiedRole.run(guildId, roleId, updatedBy, updatedAt),
+    getPaidVerifiedRole: (guildId) => statements.getPaidVerifiedRole.get(guildId)?.role_id ?? null,
+    addPaidVerifiedUser: (guildId, userId, addedBy, createdAt = new Date().toISOString()) =>
+      statements.addPaidVerifiedUser.run(guildId, userId, addedBy, createdAt),
+    getPaidVerifiedUsers: (guildId) => statements.getPaidVerifiedUsers.all(guildId),
+    isPaidVerifiedUser: (guildId, userId) => Boolean(statements.isPaidVerifiedUser.get(guildId, userId)),
     addForceManagementLog: (entry) => statements.addForceManagementLog.run(entry),
     close: () => connection.close()
   };
