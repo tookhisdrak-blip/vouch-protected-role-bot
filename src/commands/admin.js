@@ -4,7 +4,7 @@ const { hasOwnerAccess, isOs, isOwnerOrOs } = require('../services/permissions')
 const { logEvent } = require('../services/eventLogger');
 const { listAllGuildMembers, membersWithRole, countMembersByRole } = require('../services/guildMembers');
 const { reconcileLimitedRole } = require('../services/roleProtection');
-const { getMember, roleIdFrom, userIdFrom, isRoleMention, isUserMention } = require('./utils');
+const { getMember, getRole, resolveUserOrRole, roleIdFrom } = require('./utils');
 
 const LOG_CHANNELS = [
   { category: 'vouch', name: 'vouch-logs', label: 'Vouch Logs' },
@@ -119,11 +119,11 @@ async function setRole(message, args, db) {
 
   if (first?.toLowerCase() === 'os') {
     if (second?.toLowerCase() === 'remove' && args[2]) {
-      const target = args[2];
-      const userId = userIdFrom(target);
-      const roleId = roleIdFrom(target);
+      const target = await resolveUserOrRole(message.guild, args[2]);
+      const userId = target?.type === 'user' ? target.id : null;
+      const roleId = target?.type === 'role' ? target.id : null;
       if (userId) db.removeOsUser(guildId, userId);
-      else if (roleId && roleId === db.getSettings(guildId).os_role_id) db.setSetting(guildId, 'os_role_id', null);
+      else if (roleId === db.getSettings(guildId).os_role_id) db.setSetting(guildId, 'os_role_id', null);
       else return message.reply({ embeds: [failure('Provide an OS user or the configured OS role to remove.')], allowedMentions: { parse: [] } });
       await logEvent(message.guild, db, {
         event_type: 'OS ACCESS UPDATED', executor_id: message.author.id, affected_user_id: userId,
@@ -132,11 +132,9 @@ async function setRole(message, args, db) {
       return message.reply({ embeds: [success('OS access removed.')], allowedMentions: { parse: [] } });
     }
 
-    if (isRoleMention(second)) {
-      const roleId = roleIdFrom(second);
-      if (!message.guild.roles.cache.has(roleId) || roleId === message.guild.id) {
-        return message.reply({ embeds: [failure('That role is not available for OS configuration.')], allowedMentions: { parse: [] } });
-      }
+    const role = await getRole(message.guild, second);
+    if (role) {
+      const roleId = role.id;
       db.setSetting(guildId, 'os_role_id', roleId);
       await logEvent(message.guild, db, {
         event_type: 'OS ACCESS UPDATED', executor_id: message.author.id, affected_user_id: null,
@@ -155,11 +153,10 @@ async function setRole(message, args, db) {
     return message.reply({ embeds: [success(`${mentionUser(target.id)} is now OS.`)], allowedMentions: { parse: [] } });
   }
 
-  if (first?.toLowerCase() === 'stripstaff' && isRoleMention(second)) {
-    const roleId = roleIdFrom(second);
-    if (!message.guild.roles.cache.has(roleId) || roleId === message.guild.id) {
-      return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
-    }
+  if (first?.toLowerCase() === 'stripstaff') {
+    const role = await getRole(message.guild, second);
+    if (!role) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+    const roleId = role.id;
     db.setSetting(guildId, 'stripstaff_role_id', roleId);
     await logEvent(message.guild, db, {
       event_type: 'ROLE PROTECTION CONFIGURED', executor_id: message.author.id, affected_user_id: null,
@@ -168,7 +165,7 @@ async function setRole(message, args, db) {
     return message.reply({ embeds: [success(`${mentionRole(roleId)} is now the STRIPSTAFF role.`)], allowedMentions: { parse: [] } });
   }
 
-  if (isRoleMention(first) && second?.toLowerCase() === 'limit') {
+  if (roleIdFrom(first) && second?.toLowerCase() === 'limit') {
     return configureLimitedRole(message, first, third, db);
   }
 
@@ -177,9 +174,9 @@ async function setRole(message, args, db) {
 
 async function configureLimitedRole(message, roleValue, limitValue, db) {
   if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure role member limits.')], allowedMentions: { parse: [] } });
-  const roleId = roleIdFrom(roleValue);
-  const role = roleId && message.guild.roles.cache.get(roleId);
-  if (!role || roleId === message.guild.id) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+  const role = await getRole(message.guild, roleValue);
+  if (!role) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+  const roleId = role.id;
   const limit = Number(limitValue);
   if (!Number.isSafeInteger(limit) || limit < 0) {
     return message.reply({ embeds: [failure('The limit must be a whole number greater than or equal to zero. Use `-setlimit @role|ROLE_ID number`.')], allowedMentions: { parse: [] } });
@@ -260,9 +257,12 @@ async function limitedRoles(message, db) {
 
 async function setLog(message, args, db) {
   if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure event logging.')], allowedMentions: { parse: [] } });
-  const channelId = args[0]?.match(/^<#([0-9]+)>$/)?.[1];
+  const channelId = args[0]?.match(/^<#([0-9]+)>$/)?.[1] || args[0]?.match(/^[0-9]{17,20}$/)?.[0];
   if (!channelId) return message.reply({ embeds: [failure('Use `-setlog #channel`.')], allowedMentions: { parse: [] } });
-  const channel = message.guild.channels.cache.get(channelId);
+  let channel = message.guild.channels.cache.get(channelId);
+  if (!channel && typeof message.guild.channels.fetch === 'function') {
+    channel = await message.guild.channels.fetch(channelId).catch(() => null);
+  }
   if (!channel?.isTextBased() || !channel.send) return message.reply({ embeds: [failure('That is not a usable text channel.')], allowedMentions: { parse: [] } });
   db.setSetting(message.guild.id, 'log_channel_id', channelId);
   await logEvent(message.guild, db, {

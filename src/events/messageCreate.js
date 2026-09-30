@@ -5,6 +5,12 @@ const admin = require('../commands/admin');
 const forceManagement = require('../commands/forceManagement');
 const vouchCommands = require('../commands/vouchCommands');
 const fakePermissions = require('../commands/fakePermissions');
+const aliases = require('../commands/aliases');
+
+const defaultAliases = new Map([
+  ['vg', ['vouch', 'give']],
+  ['vag', ['vouch', 'addgiver']]
+]);
 
 const handlers = new Map([
   ['vouch', (message, args, db) => vouch.execute(message, args, db)],
@@ -27,21 +33,34 @@ const handlers = new Map([
   ['foreverban', (message, args, db) => forceManagement.execute(message, ['foreverban', ...args], db)],
   ['unforeverban', (message, args, db) => forceManagement.execute(message, ['unforeverban', ...args], db)],
   ['foreverbanlist', (message, args, db) => forceManagement.execute(message, ['foreverbanlist', ...args], db)],
-  ['fp', (message, args, db) => fakePermissions.execute(message, args, db)]
+  ['fp', (message, args, db) => fakePermissions.execute(message, args, db)],
+  ['alias', (message, args, db) => aliases.execute(message, args, db, { handlers, defaultAliases })]
 ]);
+
+function resolveCommand(guildId, commandName, args, db) {
+  const normalizedName = commandName.toLowerCase();
+  const defaultAlias = defaultAliases.get(normalizedName);
+  if (defaultAlias) return { commandName: defaultAlias[0], args: [...defaultAlias.slice(1), ...args] };
+
+  const customAlias = db.getCommandAlias(guildId, normalizedName);
+  if (!customAlias) return { commandName: normalizedName, args };
+  const [resolvedName, ...fixedArgs] = customAlias.command.split(/\s+/);
+  return { commandName: resolvedName, args: [...fixedArgs, ...args] };
+}
 
 async function handleMessageCreate(message, client, db, prefix) {
   if (!message.guild || message.author.bot || !message.content.startsWith(prefix)) return;
-  const [commandName, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
-  if (!commandName) return;
-  const handler = handlers.get(commandName.toLowerCase());
+  db.ensureGuild(message.guild.id);
+  const [requestedName, ...requestedArgs] = message.content.slice(prefix.length).trim().split(/\s+/);
+  if (!requestedName) return;
+  const resolved = resolveCommand(message.guild.id, requestedName, requestedArgs, db);
+  const handler = handlers.get(resolved.commandName);
   if (!handler) return;
 
-  db.ensureGuild(message.guild.id);
   try {
-    await handler(message, args, db, client);
+    await handler(message, resolved.args, db, client);
   } catch (error) {
-    console.error(`Command ${commandName} failed in ${message.guild.id}:`, error);
+    console.error(`Command ${requestedName} failed in ${message.guild.id}:`, error);
     await message.reply({ embeds: [failure('The command could not be completed. Check bot permissions and role configuration.')], allowedMentions: { parse: [] } }).catch(() => null);
   }
 }
@@ -60,4 +79,4 @@ async function handleMessageUpdate(oldMessage, newMessage, client, db, prefix) {
   return handleMessageCreate(message, client, db, prefix);
 }
 
-module.exports = { handleMessageCreate, handleMessageUpdate, handlers };
+module.exports = { handleMessageCreate, handleMessageUpdate, handlers, defaultAliases, resolveCommand };

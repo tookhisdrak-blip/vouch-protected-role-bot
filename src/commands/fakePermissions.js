@@ -2,7 +2,7 @@ const { embed, success, failure, mentionRole, mentionUser } = require('../utils/
 const { isOwnerOrOs } = require('../services/permissions');
 const { FAKE_PERMISSIONS, normalizeFakePermission } = require('../services/fakePermissions');
 const { logEvent } = require('../services/eventLogger');
-const { isRoleMention, isUserMention, roleIdFrom, userIdFrom } = require('./utils');
+const { resolveUserOrRole } = require('./utils');
 
 const USAGE = 'Use `-fp add @user/id or @role/id <permission>`, `-fp remove @user/id or @role/id <permission>` or `-fp list`.';
 
@@ -11,18 +11,11 @@ function reply(message, payload) {
 }
 
 async function resolveTarget(guild, client, input) {
-  if (isRoleMention(input)) {
-    const roleId = roleIdFrom(input);
-    return guild.roles.cache.has(roleId) && roleId !== guild.id ? { type: 'role', id: roleId } : null;
-  }
-  if (isUserMention(input)) return { type: 'user', id: userIdFrom(input) };
-  const id = userIdFrom(input);
-  if (!id) return null;
-  if (guild.roles.cache.has(id)) return id === guild.id ? null : { type: 'role', id };
-  const member = await guild.members.fetch(id).catch(() => null);
-  if (member) return { type: 'user', id };
-  const user = await client?.users?.fetch(id).catch(() => null);
-  return user ? { type: 'user', id } : null;
+  const target = await resolveUserOrRole(guild, input);
+  if (target) return { type: target.type, id: target.id };
+  if (!/^[0-9]{17,20}$/.test(input || '')) return null;
+  const user = await client?.users?.fetch(input).catch(() => null);
+  return user ? { type: 'user', id: user.id } : null;
 }
 
 function targetText(target) {

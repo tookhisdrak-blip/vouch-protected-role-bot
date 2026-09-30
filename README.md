@@ -13,6 +13,8 @@ A CommonJS Discord moderation bot for persistent vouches and protected-role limi
 
 SQLite is stored at `./data/moderation.sqlite` by default for local development. Set `DATABASE_PATH` to use another location. Configuration, vouches, limited roles, force rules, bans, log-channel IDs, and logs all live in this one file and survive restarts as long as the file is retained. The Guild Owner can run `-vouchlogsetup` once to create private Vouch, Ban, Main, and Admin log channels; the bot needs Manage Channels permission. Re-running setup reuses the configured channels.
 
+Every user argument accepts a user mention or user ID, and every role argument accepts a role mention or role ID. Mixed user/role commands verify raw IDs against Discord so they are not treated as the wrong target type. Custom aliases are also stored in SQLite and survive restarts.
+
 ## Deploying on Railway
 
 1. Push this repository to GitHub. `.env` (and any `.env.*` except `.env.example`), the `data/` folder, and all SQLite files (`*.sqlite`, `*.db`, `-wal`, `-shm`, `-journal`) are git-ignored, so the bot token and databases are never committed. Never put a real token in `.env.example`.
@@ -68,6 +70,9 @@ Use `-vouchhelp` or `-vouchcommands` to open the interactive, permission-filtere
 - `-forcestrip @user @role`, `-forcestrip @role-name/id`, and `-unforcestrip @user` (aliases)
 - `-foreverban @user [reason]`, `-unforeverban @user`, and `-foreverbanlist [page]` (fake `ban_members` permission; OS and Guild Owner have it automatically)
 - `-fp add @user/id or @role/id <permission>`, `-fp remove @user/id or @role/id <permission>`, and `-fp list` (OS and Guild Owner)
+- `-vg @user|USER_ID [reason]` (alias for `-vouch give`)
+- `-vag @user|USER_ID` (alias for `-vouch addgiver`)
+- `-alias add shortcut original command`, `-alias remove shortcut`, and `-alias list` (OS and Guild Owner; persistent)
 
 ### Fake permissions
 

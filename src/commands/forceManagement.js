@@ -19,7 +19,7 @@ const {
   isProtectedGlobalStripRole
 } = require('../services/forceRules');
 const { createForeverBan, removeForeverBan } = require('../services/foreverBans');
-const { getMember, roleIdFrom, userIdFrom } = require('./utils');
+const { getMember, getRole, userIdFrom } = require('./utils');
 
 const panelCategories = [
   ['nicknames', 'Forced Nicknames'],
@@ -38,9 +38,9 @@ function denial(message, ownerRequired = false) {
   });
 }
 
-function resolveRole(guild, input) {
-  const roleId = roleIdFrom(input);
-  if (roleId) return guild.roles.cache.get(roleId) || null;
+async function resolveRole(guild, input) {
+  const role = await getRole(guild, input);
+  if (role) return role;
   const exactName = guild.roles.cache.filter((role) => role.name === input);
   return exactName.size === 1 ? exactName.first() : null;
 }
@@ -171,7 +171,7 @@ async function unforcedNickname(message, args, db) {
 async function forcedRoleStrip(message, args, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const member = await getMember(message.guild, args[0]);
-  const role = resolveRole(message.guild, args[1]);
+  const role = await resolveRole(message.guild, args[1]);
   if (!member || !role) return message.reply({ embeds: [failure('Use `-forcerolestrip @user @role`.')], allowedMentions: { parse: [] } });
   const result = await createForcedRoleStrip(member, role.id, message.author.id, db);
   if (result.removal.status === 'failed') {
@@ -197,7 +197,7 @@ function clearExpiredPending() {
 
 async function globalRoleStrip(message, roleInput, db) {
   if (!isForceManager(message.member, db)) return denial(message);
-  const role = resolveRole(message.guild, roleInput);
+  const role = await resolveRole(message.guild, roleInput);
   if (!role) return message.reply({ embeds: [failure('Role not found. Use a role mention, ID, or exact role name.')], allowedMentions: { parse: [] } });
   if (isProtectedGlobalStripRole(message.guild, role.id, db)) {
     return message.reply({ embeds: [failure('The configured OS and official vouch roles cannot be globally stripped.')], allowedMentions: { parse: [] } });

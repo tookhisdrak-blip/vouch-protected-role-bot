@@ -708,7 +708,7 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
   assert.equal(db.getVouch(guild.id, commandTarget.id).reason, 'command reason');
   assert.equal(remainingVouches(guild.id, newGiver.id, db), 1);
   assert.deepEqual([...handlers.keys()].sort(), [
-    'forcemanage', 'forcenickname', 'forcerolestrip', 'forcestrip', 'foreverban', 'foreverbanlist', 'fp',
+    'alias', 'forcemanage', 'forcenickname', 'forcerolestrip', 'forcestrip', 'foreverban', 'foreverbanlist', 'fp',
     'limitedroles', 'rolestrip', 'setlimit', 'setlog', 'setrole', 'unforcenickname', 'unforcerolestrip',
     'unforcestrip', 'unforeverban', 'vouch', 'vouchblacklist', 'vouchcommands', 'vouchhelp', 'vouchlogsetup'
   ]);

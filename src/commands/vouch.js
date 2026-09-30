@@ -6,7 +6,7 @@ const {
 const { logEvent } = require('../services/eventLogger');
 const { giveVouch, takeVouch, wipeVouches } = require('../services/vouches');
 const { reconcileVouchRole } = require('../services/roleProtection');
-const { getMember, roleIdFrom, isRoleMention } = require('./utils');
+const { getMember, getRole, userIdFrom } = require('./utils');
 
 function ownerReply(message) {
   return message.reply({ embeds: [failure('Only the Guild Owner can use this command.')], allowedMentions: { parse: [] } });
@@ -75,9 +75,9 @@ async function list(message, args, db) {
 
 async function setRole(message, args, db, usage = '-vouch setrole @role') {
   if (!isOwnerOrOs(message.member, db)) return denyReply(message, 'Only OS or the Guild Owner can manage the vouch role.');
-  if (!isRoleMention(args[0])) return message.reply({ embeds: [failure(`Use \`${usage}\`.`)], allowedMentions: { parse: [] } });
-  const roleId = roleIdFrom(args[0]);
-  if (!message.guild.roles.cache.has(roleId) || roleId === message.guild.id) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+  const role = await getRole(message.guild, args[0]);
+  if (!role) return message.reply({ embeds: [failure(`Use \`${usage}\`.`)], allowedMentions: { parse: [] } });
+  const roleId = role.id;
   db.setSetting(message.guild.id, 'vouch_role_id', roleId);
   const reconciliation = await reconcileVouchRole(message.guild, db, 'Vouch role configured: no active vouch');
   const reconciliationIncomplete = reconciliation.cleanupFailures.length > 0 || reconciliation.memberFetchFailed;
@@ -114,9 +114,9 @@ async function unsetRole(message, db) {
 
 async function setReward(message, args, db) {
   if (!hasOwnerAccess(message.member, db)) return ownerReply(message);
-  if (!isRoleMention(args[0])) return message.reply({ embeds: [failure('Use `-vouch setreward @role`.')], allowedMentions: { parse: [] } });
-  const roleId = roleIdFrom(args[0]);
-  if (!message.guild.roles.cache.has(roleId) || roleId === message.guild.id) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
+  const role = await getRole(message.guild, args[0]);
+  if (!role) return message.reply({ embeds: [failure('Use `-vouch setreward @role|ROLE_ID`.')], allowedMentions: { parse: [] } });
+  const roleId = role.id;
   db.setSetting(message.guild.id, 'reward_role_id', roleId);
   await logEvent(message.guild, db, {
     event_type: 'VOUCH REWARD CONFIGURED', executor_id: message.author.id, affected_user_id: null,
@@ -172,7 +172,7 @@ async function setLimit(message, args, db) {
     return message.reply({ embeds: [success(`${mentionUser(target.id)} now uses the ${os ? 'OS' : admin ? 'Vouch Admin' : 'giver'} default allowance.`)], allowedMentions: { parse: [] } });
   }
 
-  if (args[0]?.match(/^<@!?[0-9]+>$/)) {
+  if (userIdFrom(args[0]) && args[1] !== undefined) {
     const target = await getMember(message.guild, args[0]);
     const limit = Number(args[1]);
     const registeredGiver = target && db.getGiver(guildId, target.id);

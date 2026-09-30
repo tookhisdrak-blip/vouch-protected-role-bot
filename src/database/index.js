@@ -153,6 +153,15 @@ function createDatabase(databasePath) {
       created_at TEXT NOT NULL,
       PRIMARY KEY (guild_id, target_type, target_id, permission)
     );
+    CREATE TABLE IF NOT EXISTS command_aliases (
+      guild_id TEXT NOT NULL,
+      shortcut TEXT NOT NULL,
+      command TEXT NOT NULL,
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, shortcut)
+    );
     CREATE INDEX IF NOT EXISTS forced_role_strips_target
       ON forced_role_strips (guild_id, user_id);
     CREATE INDEX IF NOT EXISTS forever_bans_user
@@ -284,6 +293,17 @@ function createDatabase(databasePath) {
     removeFakePermission: connection.prepare('DELETE FROM fake_permissions WHERE guild_id = ? AND target_type = ? AND target_id = ? AND permission = ?'),
     getFakePermissions: connection.prepare('SELECT * FROM fake_permissions WHERE guild_id = ? ORDER BY permission, target_type, created_at, target_id'),
     getFakePermissionGrants: connection.prepare('SELECT target_type, target_id FROM fake_permissions WHERE guild_id = ? AND permission = ?'),
+    getCommandAlias: connection.prepare('SELECT * FROM command_aliases WHERE guild_id = ? AND shortcut = ?'),
+    getCommandAliases: connection.prepare('SELECT * FROM command_aliases WHERE guild_id = ? ORDER BY shortcut'),
+    setCommandAlias: connection.prepare(`
+      INSERT INTO command_aliases (guild_id, shortcut, command, added_by, created_at, updated_at)
+      VALUES (@guild_id, @shortcut, @command, @added_by, @created_at, @updated_at)
+      ON CONFLICT(guild_id, shortcut) DO UPDATE SET
+        command = excluded.command,
+        added_by = excluded.added_by,
+        updated_at = excluded.updated_at
+    `),
+    removeCommandAlias: connection.prepare('DELETE FROM command_aliases WHERE guild_id = ? AND shortcut = ?'),
     addForceManagementLog: connection.prepare(`
       INSERT INTO force_management_logs
         (guild_id, action, target_user_id, role_id, nickname, executor_id, result, reason, punishment, failure_reason, attribution_status, created_at)
@@ -378,6 +398,19 @@ function createDatabase(databasePath) {
       statements.removeFakePermission.run(guildId, targetType, targetId, permission),
     getFakePermissions: (guildId) => statements.getFakePermissions.all(guildId),
     getFakePermissionGrants: (guildId, permission) => statements.getFakePermissionGrants.all(guildId, permission),
+    getCommandAlias: (guildId, shortcut) => statements.getCommandAlias.get(guildId, shortcut),
+    getCommandAliases: (guildId) => statements.getCommandAliases.all(guildId),
+    setCommandAlias(guildId, shortcut, command, addedBy, now = new Date().toISOString()) {
+      return statements.setCommandAlias.run({
+        guild_id: guildId,
+        shortcut,
+        command,
+        added_by: addedBy,
+        created_at: now,
+        updated_at: now
+      });
+    },
+    removeCommandAlias: (guildId, shortcut) => statements.removeCommandAlias.run(guildId, shortcut),
     addForceManagementLog: (entry) => statements.addForceManagementLog.run(entry),
     close: () => connection.close()
   };

@@ -80,7 +80,8 @@ const SHORT_DESCRIPTIONS = {
   '-foreverbanlist [page]': 'View forever-ban records',
   '-fp add @user|@role ban_members': 'Grant a fake permission',
   '-fp remove @user|@role ban_members': 'Remove a fake permission',
-  '-fp list': 'List fake permission holders'
+  '-fp list': 'List fake permission holders',
+  '-alias add shortcut original command': 'Create or update a command alias'
 };
 
 function rootCommand(entry) {
