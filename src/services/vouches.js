@@ -1,4 +1,4 @@
-const { canGiveVouch, isOwnerOrOs, remainingVouches } = require('./permissions');
+const { canGiveVouch, hasVouchAdminAccess, remainingVouches } = require('./permissions');
 const { logEvent } = require('./eventLogger');
 const { applyStripstaff, removeRoleDetailed } = require('./roleProtection');
 
@@ -123,8 +123,8 @@ async function takeVouch(actor, recipient, reason, db) {
   const guildId = actor.guild.id;
   const vouch = db.getVouch(guildId, recipient.id);
   if (!vouch) return { ok: false, message: 'That member has no active vouch.' };
-  if (!isOwnerOrOs(actor, db) && actor.id !== vouch.giver_id) {
-    return { ok: false, message: 'Only the original giver, OS, or Guild Owner can remove this vouch.' };
+  if (!hasVouchAdminAccess(actor, db) && actor.id !== vouch.giver_id) {
+    return { ok: false, message: 'Only the original giver, a Vouch Admin, OS, or the Guild Owner can remove this vouch.' };
   }
 
   db.removeVouch(guildId, recipient.id);

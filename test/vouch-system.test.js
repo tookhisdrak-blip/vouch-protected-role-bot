@@ -908,7 +908,7 @@ test('valid vouch keeps the vouch role; only the original giver, OS, or Guild Ow
 
   const blocked = makeMessage(guild, otherGiver, `-vouch take <@${first.id}>`);
   await handleMessageCreate(blocked, blocked.client, db, '-');
-  assert.match(blocked.replies[0].embeds[0].data.description, /Only the original giver, OS, or Guild Owner/);
+  assert.match(blocked.replies[0].embeds[0].data.description, /Only the original giver, a Vouch Admin, OS, or the Guild Owner/);
   assert.ok(db.getVouch(guild.id, first.id), 'a different normal giver cannot remove the vouch');
   assert.equal(first.roles.cache.has(vouchRole), true);
 

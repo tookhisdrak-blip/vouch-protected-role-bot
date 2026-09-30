@@ -670,13 +670,21 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
     };
   }
 
+  const regularConfigMessage = await mockMessage(regular);
+  await vouchCommands.execute(regularConfigMessage, ['setrole', `<@&${vouchRoleId}>`], db);
+  await vouchCommands.execute(regularConfigMessage, ['addgiver', `<@${newGiver.id}>`], db);
+  assert.equal(db.getSettings(guild.id).vouch_role_id, null, 'regular members cannot manage the vouch role');
+  assert.equal(db.getGiver(guild.id, newGiver.id), undefined, 'regular members cannot authorize givers');
+
   const osMessage = await mockMessage(os);
   await adminCommands.setRole(osMessage, ['os', `<@&${osRoleId}>`], db);
   await vouchCommands.execute(osMessage, ['setrole', `<@&${vouchRoleId}>`], db);
   await vouchCommands.execute(osMessage, ['addgiver', `<@${newGiver.id}>`], db);
-  assert.equal(db.getSettings(guild.id).os_role_id, null);
-  assert.equal(db.getSettings(guild.id).vouch_role_id, null);
-  assert.equal(db.getGiver(guild.id, newGiver.id), undefined);
+  assert.equal(db.getSettings(guild.id).os_role_id, null, 'OS cannot configure the OS role');
+  assert.equal(db.getSettings(guild.id).vouch_role_id, vouchRoleId, 'OS can manage the vouch role');
+  assert.ok(db.getGiver(guild.id, newGiver.id), 'OS can authorize vouch givers');
+  db.setSetting(guild.id, 'vouch_role_id', null);
+  db.removeGiver(guild.id, newGiver.id);
 
   const ownerMessage = await mockMessage(owner);
   await adminCommands.setRole(ownerMessage, ['os', `<@&${osRoleId}>`], db);
@@ -718,7 +726,8 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
   const osCommands = commandsFor(os);
   assert.match(osCommands, /-vouchblacklist add/);
   assert.match(osCommands, /-forcemanage/);
-  assert.doesNotMatch(osCommands, /-vouch addgiver|-setrole os/);
+  assert.match(osCommands, /-vouch addgiver/);
+  assert.doesNotMatch(osCommands, /-setrole os|-vouch owner allow|-vouch reset/);
   assert.doesNotMatch(osCommands, /-foreverban/);
 
   const ownerPageMessage = await mockMessage(owner);

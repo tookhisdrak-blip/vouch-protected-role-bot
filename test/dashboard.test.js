@@ -224,7 +224,7 @@ test('Category pages list only that category in compact one-line entries with si
   const owner = addMember(guild.ownerId);
   const { panel, client } = await openPanel(owner, guild, db);
   const ownerCategories = panel.components[0].components[0].options.map((option) => option.data.value);
-  assert.deepEqual(ownerCategories, ['giving', 'info', 'givers', 'roles', 'limited', 'blacklist', 'admin', 'force', 'forever', 'all', 'permissions']);
+  assert.deepEqual(ownerCategories, ['giving', 'info', 'givers', 'roles', 'limited', 'access', 'blacklist', 'admin', 'force', 'forever', 'all', 'permissions']);
   const homeButtons = panel.components.slice(1).flatMap((row) => row.components);
   assert.equal(homeButtons.length, ownerCategories.length, 'home has one button per category and no navigation row');
   assert.equal(panel.components.length, 4);
@@ -233,9 +233,9 @@ test('Category pages list only that category in compact one-line entries with si
   assert.equal(selected.handled, true);
   const page = selected.payload.embeds[0].data;
   assert.equal(page.title, 'Giving & Removing');
-  assert.equal(page.description, '`-vouch give @user [reason]` — Give a user a vouch\n`-vouch take @user [reason]` — Remove a vouch');
+  assert.equal(page.description, '`-vouch give @user [reason]` — Give a user a vouch\n`-vouch take @user [reason]` — Remove a vouch\n`-vouch admin take @user [reason]` — Remove any user\'s vouch');
   assert.equal(page.fields, undefined, 'no large per-command fields');
-  assert.match(page.footer.text, /^Page 1\/1 \| 2 commands \| Closes after 5 minutes of inactivity$/);
+  assert.match(page.footer.text, /^Page 1\/1 \| 3 commands \| Closes after 5 minutes of inactivity$/);
   assert.doesNotMatch(page.description, /Access:/);
   assert.equal(selected.payload.components[0].components[0].data.placeholder, 'Select a category', 'dropdown stays available');
   assert.equal(selected.payload.components.length, 2, 'dropdown and the navigation row only');
@@ -568,8 +568,14 @@ test('Displayed access labels match the real command permission gates', async (t
     if (token === 'ROLE_ID') return '300000000000000099';
     return token.replace(/^\[|\]$/g, '').replace(/\|.*$/, '');
   }).join(' ');
-  const denials = { owner: /Only the Guild Owner/, os: /Only the Guild Owner or OS/, force: /Only OS or the Guild Owner/ };
-  const actors = { owner: os, os: regular, force: regular };
+  const denials = {
+    owner: /Only the Guild Owner/,
+    realowner: /Only the Guild Owner can grant or remove Owner Allow/,
+    os: /Only (the Guild Owner or OS|OS or the Guild Owner)/,
+    admin: /Only Vouch Admins, OS, or the Guild Owner/,
+    force: /Only OS or the Guild Owner/
+  };
+  const actors = { owner: os, realowner: os, os: regular, admin: regular, force: regular };
 
   for (const entry of catalog.filter((item) => denials[item.permission])) {
     const actor = actors[entry.permission];

@@ -7,7 +7,9 @@ const {
   StringSelectMenuBuilder
 } = require('discord.js');
 const { COLORS, failure } = require('../utils/embeds');
-const { isGuildOwner, isOs, isFounder, isForceManager } = require('../services/permissions');
+const {
+  isGuildOwner, isOwnerAllowed, hasOwnerAccess, isOs, isVouchAdmin, isFounder, isForceManager
+} = require('../services/permissions');
 const { catalog, allowed } = require('./help');
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
@@ -23,6 +25,7 @@ const CATEGORIES = [
   { key: 'givers', label: 'Giver Management', title: 'Giver Management', description: 'Authorize givers and control how many people each giver can vouch for.', sources: ['Giver Management'] },
   { key: 'roles', label: 'Vouch & Reward Roles', title: 'Vouch & Reward Roles', description: 'Configure the protected vouch role and the automatic reward role.', sources: ['Vouch Roles', 'Reward Roles'] },
   { key: 'limited', label: 'Limited Roles', title: 'Limited Roles', description: 'Cap how many members can hold a role. Separate from vouch limits.', sources: ['Limited Roles'] },
+  { key: 'access', label: 'Access Levels', title: 'Access Levels', description: 'Grant or remove Vouch Admin and Owner Allow access.', sources: ['Access Levels'] },
   { key: 'blacklist', label: 'Blacklist', title: 'Vouch Blacklist', description: 'Block members from receiving vouches.', sources: ['Blacklist'] },
   { key: 'admin', label: 'Administration', title: 'Vouch Administration', description: 'STRIPSTAFF role, OS access, event logs, and full vouch resets.', sources: ['Vouch Administration'] },
   { key: 'force', label: 'Force Management', title: 'Force Management', description: 'Forced nicknames, member role strips, and global role strips.', sources: [...FORCE_CATEGORIES] },
@@ -35,6 +38,11 @@ const CATEGORY_INFO = Object.fromEntries(CATEGORIES.map((category) => [category.
 const SHORT_DESCRIPTIONS = {
   '-vouch give @user [reason]': 'Give a user a vouch',
   '-vouch take @user [reason]': 'Remove a vouch',
+  '-vouch admin take @user [reason]': 'Remove any user\'s vouch',
+  '-vouch admin allow @user': 'Make a user a Vouch Admin',
+  '-vouch admin remove @user': 'Remove a Vouch Admin',
+  '-vouch owner allow @user': 'Give a user full owner access',
+  '-vouch owner remove @user': 'Remove a user\'s owner access',
   '-vouch check [@user]': 'View vouch and allowance info',
   '-vouch list [page]': 'Browse active vouches',
   '-vouchhelp [category|page]': 'Open this help dashboard',
@@ -100,7 +108,7 @@ function aliasesFor(entry, entries = registeredCatalog()) {
 }
 
 function sectionEntries(section, member, db, entries = primaryCommands()) {
-  if (section.ownerOnly && !isGuildOwner(member)) return [];
+  if (section.ownerOnly && !hasOwnerAccess(member, db)) return [];
   const sources = new Set(section.sources);
   return entries.filter((entry) => sources.has(entry.category) && allowed(entry, member, db));
 }
@@ -138,21 +146,30 @@ function shortDescription(entry) {
   return firstSentence.length > 60 ? `${firstSentence.slice(0, 57)}...` : firstSentence;
 }
 
+// Command words before the first argument placeholder, e.g. `-vouch role add @role` -> `-vouch role add`.
+function aliasName(alias) {
+  const words = alias.split(/\s+/);
+  const argumentIndex = words.findIndex((word, index) => index > 0 && /^[@\[#<]|\|/.test(word));
+  return (argumentIndex === -1 ? words : words.slice(0, argumentIndex)).join(' ');
+}
+
 function commandLine(entry) {
-  const aliases = aliasesFor(entry).map((alias) => `\`${alias.split(/\s+/)[0]}\``);
+  const aliases = aliasesFor(entry).map((alias) => `\`${aliasName(alias)}\``);
   const aliasText = aliases.length ? ` (alias ${[...new Set(aliases)].join(', ')})` : '';
   return `\`${entry.command}\` — ${shortDescription(entry)}${aliasText}`;
 }
 
 function permissionDescription(member, db) {
   const access = [];
-  if (isGuildOwner(member)) access.push('Guild Owner: all commands, including Forever Bans.');
-  if (isOs(member, db)) access.push('OS: OS-authorized vouch and blacklist commands. OS members can give vouches within their OS allowance.');
+  if (isGuildOwner(member)) access.push('Guild Owner: all commands, including Forever Bans and Owner Allow.');
+  else if (isOwnerAllowed(member, db)) access.push('Owner Allow: full Guild Owner access, except granting Owner Allow.');
+  if (isOs(member, db)) access.push('OS: Vouch Admin powers, vouch role, Vouch Admins, and blacklist. 5 default vouches.');
+  if (isVouchAdmin(member, db)) access.push('Vouch Admin: give vouches (5 default), manage givers, remove any vouch.');
   if (isFounder(member)) access.push('Founder: Force Management commands only; no Forever Ban access.');
-  if (db.getGiver(member.guild.id, member.id)) access.push('Vouch Giver: give vouches within your active allowance; remove your own vouches.');
+  if (db.getGiver(member.guild.id, member.id)) access.push('Vouch Giver: give vouches within your allowance; remove your own vouches.');
   if (isForceManager(member, db)) access.push('Force Management: forced nicknames and role-strip commands.');
   if (!access.length) access.push('Regular member: public vouch information and limited-role views.');
-  if (!isGuildOwner(member)) access.push('Forever Ban commands are Guild Owner-only.');
+  if (!hasOwnerAccess(member, db)) access.push('Forever Ban commands are Guild Owner-only.');
   return access.join('\n');
 }
 

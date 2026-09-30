@@ -1,16 +1,16 @@
 const { EmbedBuilder } = require('discord.js');
 const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
-const { isGuildOwner, isOs, isOwnerOrOs } = require('../services/permissions');
+const { hasOwnerAccess, isOs, isOwnerOrOs } = require('../services/permissions');
 const { logEvent } = require('../services/eventLogger');
 const { reconcileLimitedRole } = require('../services/roleProtection');
 const { getMember, roleIdFrom, userIdFrom, isRoleMention, isUserMention } = require('./utils');
 
-function ownerOnly(member) {
-  return isGuildOwner(member);
+function ownerOnly(member, db) {
+  return hasOwnerAccess(member, db);
 }
 
 async function setRole(message, args, db) {
-  if (!ownerOnly(message.member)) return message.reply({ embeds: [failure('Only the Guild Owner can configure roles or OS.')], allowedMentions: { parse: [] } });
+  if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure roles or OS.')], allowedMentions: { parse: [] } });
   const [first, second, third] = args;
   const guildId = message.guild.id;
 
@@ -73,7 +73,7 @@ async function setRole(message, args, db) {
 }
 
 async function configureLimitedRole(message, roleValue, limitValue, db) {
-  if (!ownerOnly(message.member)) return message.reply({ embeds: [failure('Only the Guild Owner can configure role member limits.')], allowedMentions: { parse: [] } });
+  if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure role member limits.')], allowedMentions: { parse: [] } });
   const roleId = roleIdFrom(roleValue);
   const role = roleId && message.guild.roles.cache.get(roleId);
   if (!role || roleId === message.guild.id) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
@@ -147,7 +147,7 @@ async function limitedRoles(message, db) {
 }
 
 async function setLog(message, args, db) {
-  if (!ownerOnly(message.member)) return message.reply({ embeds: [failure('Only the Guild Owner can configure event logging.')], allowedMentions: { parse: [] } });
+  if (!ownerOnly(message.member, db)) return message.reply({ embeds: [failure('Only the Guild Owner can configure event logging.')], allowedMentions: { parse: [] } });
   const channelId = args[0]?.match(/^<#([0-9]+)>$/)?.[1];
   if (!channelId) return message.reply({ embeds: [failure('Use `-setlog #channel`.')], allowedMentions: { parse: [] } });
   const channel = message.guild.channels.cache.get(channelId);

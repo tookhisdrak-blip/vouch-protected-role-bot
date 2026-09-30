@@ -42,6 +42,21 @@ function createDatabase(databasePath) {
       custom_limit INTEGER NOT NULL CHECK (custom_limit >= 0),
       PRIMARY KEY (guild_id, user_id)
     );
+    CREATE TABLE IF NOT EXISTS vouch_admins (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      custom_limit INTEGER CHECK (custom_limit IS NULL OR custom_limit >= 0),
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS owner_allowed_users (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    );
     CREATE TABLE IF NOT EXISTS active_vouches (
       guild_id TEXT NOT NULL,
       recipient_id TEXT NOT NULL,
@@ -163,6 +178,15 @@ function createDatabase(databasePath) {
       ON CONFLICT(guild_id, user_id) DO UPDATE SET custom_limit = excluded.custom_limit
     `),
     removeOsVouchLimit: connection.prepare('DELETE FROM os_vouch_limits WHERE guild_id = ? AND user_id = ?'),
+    addVouchAdmin: connection.prepare('INSERT OR IGNORE INTO vouch_admins (guild_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)'),
+    removeVouchAdmin: connection.prepare('DELETE FROM vouch_admins WHERE guild_id = ? AND user_id = ?'),
+    getVouchAdmin: connection.prepare('SELECT * FROM vouch_admins WHERE guild_id = ? AND user_id = ?'),
+    getVouchAdmins: connection.prepare('SELECT * FROM vouch_admins WHERE guild_id = ? ORDER BY created_at, user_id'),
+    setVouchAdminLimit: connection.prepare('UPDATE vouch_admins SET custom_limit = ? WHERE guild_id = ? AND user_id = ?'),
+    addOwnerAllowed: connection.prepare('INSERT OR IGNORE INTO owner_allowed_users (guild_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)'),
+    removeOwnerAllowed: connection.prepare('DELETE FROM owner_allowed_users WHERE guild_id = ? AND user_id = ?'),
+    isOwnerAllowed: connection.prepare('SELECT 1 FROM owner_allowed_users WHERE guild_id = ? AND user_id = ?'),
+    getOwnerAllowed: connection.prepare('SELECT * FROM owner_allowed_users WHERE guild_id = ? ORDER BY created_at, user_id'),
     getVouch: connection.prepare('SELECT * FROM active_vouches WHERE guild_id = ? AND recipient_id = ?'),
     getVouches: connection.prepare('SELECT * FROM active_vouches WHERE guild_id = ? ORDER BY created_at, recipient_id'),
     countGiverVouches: connection.prepare('SELECT COUNT(*) AS count FROM active_vouches WHERE guild_id = ? AND giver_id = ?'),
@@ -261,6 +285,15 @@ function createDatabase(databasePath) {
     getOsVouchLimit: (guildId, userId) => statements.getOsVouchLimit.get(guildId, userId)?.custom_limit ?? null,
     setOsVouchLimit: (guildId, userId, limit) => statements.setOsVouchLimit.run(guildId, userId, limit),
     removeOsVouchLimit: (guildId, userId) => statements.removeOsVouchLimit.run(guildId, userId),
+    addVouchAdmin: (guildId, userId, addedBy, createdAt = new Date().toISOString()) => statements.addVouchAdmin.run(guildId, userId, addedBy, createdAt),
+    removeVouchAdmin: (guildId, userId) => statements.removeVouchAdmin.run(guildId, userId),
+    getVouchAdmin: (guildId, userId) => statements.getVouchAdmin.get(guildId, userId),
+    getVouchAdmins: (guildId) => statements.getVouchAdmins.all(guildId),
+    setVouchAdminLimit: (guildId, userId, limit) => statements.setVouchAdminLimit.run(limit, guildId, userId),
+    addOwnerAllowed: (guildId, userId, addedBy, createdAt = new Date().toISOString()) => statements.addOwnerAllowed.run(guildId, userId, addedBy, createdAt),
+    removeOwnerAllowed: (guildId, userId) => statements.removeOwnerAllowed.run(guildId, userId),
+    isOwnerAllowed: (guildId, userId) => Boolean(statements.isOwnerAllowed.get(guildId, userId)),
+    getOwnerAllowed: (guildId) => statements.getOwnerAllowed.all(guildId),
     getVouch: (guildId, recipientId) => statements.getVouch.get(guildId, recipientId),
     getVouches: (guildId) => statements.getVouches.all(guildId),
     countGiverVouches: (guildId, giverId) => statements.countGiverVouches.get(guildId, giverId).count,

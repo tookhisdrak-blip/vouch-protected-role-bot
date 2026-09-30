@@ -1,6 +1,8 @@
 const { EmbedBuilder } = require('discord.js');
 const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
-const { isGuildOwner, isOs, isOwnerOrOs, remainingVouches } = require('../services/permissions');
+const {
+  isGuildOwner, hasOwnerAccess, hasVouchAdminAccess, isOs, isOwnerOrOs, isVouchAdmin, remainingVouches
+} = require('../services/permissions');
 const { logEvent } = require('../services/eventLogger');
 const { giveVouch, takeVouch, wipeVouches } = require('../services/vouches');
 const { reconcileVouchRole } = require('../services/roleProtection');
@@ -8,6 +10,10 @@ const { getMember, roleIdFrom, isRoleMention } = require('./utils');
 
 function ownerReply(message) {
   return message.reply({ embeds: [failure('Only the Guild Owner can use this command.')], allowedMentions: { parse: [] } });
+}
+
+function denyReply(message, text) {
+  return message.reply({ embeds: [failure(text)], allowedMentions: { parse: [] } });
 }
 
 async function give(message, args, db) {
@@ -19,9 +25,9 @@ async function give(message, args, db) {
   return message.reply({ embeds: [success(`${mentionUser(recipient.id)} received a vouch.${balance}`, 'Vouch recorded')], allowedMentions: { parse: [] } });
 }
 
-async function take(message, args, db) {
+async function take(message, args, db, usage = '-vouch take @user [reason]') {
   const recipient = await getMember(message.guild, args[0]);
-  if (!recipient) return message.reply({ embeds: [failure('Use `-vouch take @user [reason]`.')], allowedMentions: { parse: [] } });
+  if (!recipient) return message.reply({ embeds: [failure(`Use \`${usage}\`.`)], allowedMentions: { parse: [] } });
   const result = await takeVouch(message.member, recipient, args.slice(1).join(' ').trim(), db);
   if (!result.ok) return message.reply({ embeds: [failure(result.message, 'Vouch not removed')], allowedMentions: { parse: [] } });
   if (result.cleanupFailures.length) {
@@ -64,9 +70,9 @@ async function list(message, args, db) {
   return message.reply({ embeds: [result], allowedMentions: { parse: [] } });
 }
 
-async function setRole(message, args, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
-  if (!isRoleMention(args[0])) return message.reply({ embeds: [failure('Use `-vouch setrole @role`.')], allowedMentions: { parse: [] } });
+async function setRole(message, args, db, usage = '-vouch setrole @role') {
+  if (!isOwnerOrOs(message.member, db)) return denyReply(message, 'Only OS or the Guild Owner can manage the vouch role.');
+  if (!isRoleMention(args[0])) return message.reply({ embeds: [failure(`Use \`${usage}\`.`)], allowedMentions: { parse: [] } });
   const roleId = roleIdFrom(args[0]);
   if (!message.guild.roles.cache.has(roleId) || roleId === message.guild.id) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
   db.setSetting(message.guild.id, 'vouch_role_id', roleId);
@@ -93,7 +99,7 @@ async function setRole(message, args, db) {
 }
 
 async function unsetRole(message, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
+  if (!isOwnerOrOs(message.member, db)) return denyReply(message, 'Only OS or the Guild Owner can manage the vouch role.');
   const roleId = db.getSettings(message.guild.id).vouch_role_id;
   db.setSetting(message.guild.id, 'vouch_role_id', null);
   await logEvent(message.guild, db, {
@@ -104,7 +110,7 @@ async function unsetRole(message, db) {
 }
 
 async function setReward(message, args, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
+  if (!hasOwnerAccess(message.member, db)) return ownerReply(message);
   if (!isRoleMention(args[0])) return message.reply({ embeds: [failure('Use `-vouch setreward @role`.')], allowedMentions: { parse: [] } });
   const roleId = roleIdFrom(args[0]);
   if (!message.guild.roles.cache.has(roleId) || roleId === message.guild.id) return message.reply({ embeds: [failure('That role does not exist.')], allowedMentions: { parse: [] } });
@@ -117,7 +123,7 @@ async function setReward(message, args, db) {
 }
 
 async function addGiver(message, args, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
+  if (!hasVouchAdminAccess(message.member, db)) return denyReply(message, 'Only Vouch Admins, OS, or the Guild Owner can manage vouch givers.');
   const target = await getMember(message.guild, args[0]);
   if (!target || target.user.bot) return message.reply({ embeds: [failure('Mention a human server member.')], allowedMentions: { parse: [] } });
   db.addGiver(message.guild.id, target.id);
@@ -129,7 +135,7 @@ async function addGiver(message, args, db) {
 }
 
 async function removeGiver(message, args, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
+  if (!hasVouchAdminAccess(message.member, db)) return denyReply(message, 'Only Vouch Admins, OS, or the Guild Owner can manage vouch givers.');
   const target = await getMember(message.guild, args[0]);
   if (!target) return message.reply({ embeds: [failure('Mention a server member.')], allowedMentions: { parse: [] } });
   db.removeGiver(message.guild.id, target.id);
@@ -141,23 +147,26 @@ async function removeGiver(message, args, db) {
 }
 
 async function setLimit(message, args, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
+  if (!hasOwnerAccess(message.member, db)) return ownerReply(message);
   const guildId = message.guild.id;
   if (args[0]?.toLowerCase() === 'remove') {
     const target = await getMember(message.guild, args[1]);
     const registeredGiver = target && db.getGiver(guildId, target.id);
     const os = target && isOs(target, db);
-    if (!target || (!registeredGiver && !os)) return message.reply({ embeds: [failure('Mention a registered vouch giver or OS member.')], allowedMentions: { parse: [] } });
+    const admin = target && isVouchAdmin(target, db);
+    if (!target || (!registeredGiver && !os && !admin)) return message.reply({ embeds: [failure('Mention a registered vouch giver, Vouch Admin, or OS member.')], allowedMentions: { parse: [] } });
     db.setGiverLimit(guildId, target.id, null);
+    db.setVouchAdminLimit(guildId, target.id, null);
     db.removeOsVouchLimit(guildId, target.id);
     await logEvent(message.guild, db, {
       event_type: 'VOUCH ALLOWANCE UPDATED', executor_id: message.author.id, affected_user_id: target.id,
       role_id: null, reason: null, action_taken: os
         ? 'Custom allowance removed; OS default of five restored'
-        : 'Custom allowance removed; giver default restored',
+        : admin ? 'Custom allowance removed; Vouch Admin default of five restored'
+          : 'Custom allowance removed; giver default restored',
       punishment: null
     });
-    return message.reply({ embeds: [success(`${mentionUser(target.id)} now uses the ${os ? 'OS' : 'giver'} default allowance.`)], allowedMentions: { parse: [] } });
+    return message.reply({ embeds: [success(`${mentionUser(target.id)} now uses the ${os ? 'OS' : admin ? 'Vouch Admin' : 'giver'} default allowance.`)], allowedMentions: { parse: [] } });
   }
 
   if (args[0]?.match(/^<@!?[0-9]+>$/)) {
@@ -165,9 +174,11 @@ async function setLimit(message, args, db) {
     const limit = Number(args[1]);
     const registeredGiver = target && db.getGiver(guildId, target.id);
     const os = target && isOs(target, db);
-    if (!target || (!registeredGiver && !os)) return message.reply({ embeds: [failure('Mention a registered vouch giver or OS member.')], allowedMentions: { parse: [] } });
+    const admin = target && isVouchAdmin(target, db);
+    if (!target || (!registeredGiver && !os && !admin)) return message.reply({ embeds: [failure('Mention a registered vouch giver, Vouch Admin, or OS member.')], allowedMentions: { parse: [] } });
     if (!Number.isSafeInteger(limit) || limit < 0) return message.reply({ embeds: [failure('Allowance must be a whole number greater than or equal to zero.')], allowedMentions: { parse: [] } });
     if (registeredGiver) db.setGiverLimit(guildId, target.id, limit);
+    if (admin) db.setVouchAdminLimit(guildId, target.id, limit);
     if (os) db.setOsVouchLimit(guildId, target.id, limit);
     await logEvent(message.guild, db, {
       event_type: 'VOUCH ALLOWANCE UPDATED', executor_id: message.author.id, affected_user_id: target.id,
@@ -187,12 +198,83 @@ async function setLimit(message, args, db) {
 }
 
 async function wipe(message, db) {
-  if (!isGuildOwner(message.member)) return ownerReply(message);
+  if (!hasOwnerAccess(message.member, db)) return ownerReply(message);
   const result = await wipeVouches(message.guild, db, message.author.id);
   if (result.cleanupFailures.length) {
     return message.reply({ embeds: [failure(`${result.count} active vouch(es) were removed, but role cleanup failed for ${result.cleanupFailures.length} assignment(s). Check Manage Roles and role hierarchy.`, 'Role cleanup incomplete')], allowedMentions: { parse: [] } });
   }
   return message.reply({ embeds: [success(`${result.count} active vouch(es) were removed and giver allowances restored.`, 'Vouches wiped')], allowedMentions: { parse: [] } });
+}
+
+async function grantVouchAdmin(message, args, db) {
+  if (!isOwnerOrOs(message.member, db)) return denyReply(message, 'Only OS or the Guild Owner can manage Vouch Admins.');
+  const target = await getMember(message.guild, args[0]);
+  if (!target || target.user.bot) return denyReply(message, 'Use `-vouch admin allow @user` with a human server member.');
+  db.addVouchAdmin(message.guild.id, target.id, message.author.id);
+  await logEvent(message.guild, db, {
+    event_type: 'VOUCH ADMIN UPDATED', executor_id: message.author.id, affected_user_id: target.id,
+    role_id: null, reason: null, action_taken: 'Vouch Admin access granted', punishment: null
+  });
+  return message.reply({ embeds: [success(`${mentionUser(target.id)} is now a Vouch Admin.`)], allowedMentions: { parse: [] } });
+}
+
+async function revokeVouchAdmin(message, args, db) {
+  if (!isOwnerOrOs(message.member, db)) return denyReply(message, 'Only OS or the Guild Owner can manage Vouch Admins.');
+  const target = await getMember(message.guild, args[0]);
+  if (!target) return denyReply(message, 'Use `-vouch admin remove @user`.');
+  if (!isVouchAdmin(target, db)) return denyReply(message, 'That member is not a Vouch Admin.');
+  db.removeVouchAdmin(message.guild.id, target.id);
+  await logEvent(message.guild, db, {
+    event_type: 'VOUCH ADMIN UPDATED', executor_id: message.author.id, affected_user_id: target.id,
+    role_id: null, reason: null, action_taken: 'Vouch Admin access removed; existing vouches kept', punishment: null
+  });
+  return message.reply({ embeds: [success(`${mentionUser(target.id)} is no longer a Vouch Admin. Their existing vouches were kept.`)], allowedMentions: { parse: [] } });
+}
+
+async function adminCommand(message, args, db) {
+  const action = args[0]?.toLowerCase();
+  const rest = args.slice(1);
+  if (action === 'take') {
+    if (!hasVouchAdminAccess(message.member, db)) return denyReply(message, 'Only Vouch Admins, OS, or the Guild Owner can use `-vouch admin take`.');
+    return take(message, rest, db, '-vouch admin take @user [reason]');
+  }
+  if (action === 'allow') return grantVouchAdmin(message, rest, db);
+  if (action === 'remove') return revokeVouchAdmin(message, rest, db);
+  return denyReply(message, 'Use `-vouch admin take @user`, `-vouch admin allow @user`, or `-vouch admin remove @user`.');
+}
+
+async function ownerCommand(message, args, db) {
+  if (!isGuildOwner(message.member)) return denyReply(message, 'Only the Guild Owner can grant or remove Owner Allow.');
+  const action = args[0]?.toLowerCase();
+  if (action !== 'allow' && action !== 'remove') return denyReply(message, 'Use `-vouch owner allow @user` or `-vouch owner remove @user`.');
+  const target = await getMember(message.guild, args[1]);
+  if (!target || target.user.bot) return denyReply(message, `Use \`-vouch owner ${action} @user\` with a human server member.`);
+  if (target.id === message.guild.ownerId) return denyReply(message, 'The Guild Owner already has full access.');
+  if (action === 'allow') db.addOwnerAllowed(message.guild.id, target.id, message.author.id);
+  else {
+    if (!db.isOwnerAllowed(message.guild.id, target.id)) return denyReply(message, 'That member does not have Owner Allow.');
+    db.removeOwnerAllowed(message.guild.id, target.id);
+  }
+  await logEvent(message.guild, db, {
+    event_type: 'OWNER ALLOW UPDATED', executor_id: message.author.id, affected_user_id: target.id,
+    role_id: null, reason: null,
+    action_taken: action === 'allow' ? 'Owner Allow granted: full Guild Owner bot access' : 'Owner Allow removed',
+    punishment: null
+  });
+  return message.reply({
+    embeds: [success(action === 'allow'
+      ? `${mentionUser(target.id)} now has full Guild Owner access to this bot.`
+      : `${mentionUser(target.id)} no longer has Owner Allow.`)],
+    allowedMentions: { parse: [] }
+  });
+}
+
+async function roleCommand(message, args, db) {
+  const action = args[0]?.toLowerCase();
+  if (action === 'add') return setRole(message, args.slice(1), db, '-vouch role add @role');
+  if (action === 'remove') return unsetRole(message, db);
+  if (!isOwnerOrOs(message.member, db)) return denyReply(message, 'Only OS or the Guild Owner can manage the vouch role.');
+  return denyReply(message, 'Use `-vouch role add @role` or `-vouch role remove`.');
 }
 
 async function execute(message, args, db) {
@@ -210,6 +292,10 @@ async function execute(message, args, db) {
     case 'removegiver': return removeGiver(message, rest, db);
     case 'limit': return setLimit(message, rest, db);
     case 'wipeall': return wipe(message, db);
+    case 'reset': return wipe(message, db);
+    case 'admin': return adminCommand(message, rest, db);
+    case 'owner': return ownerCommand(message, rest, db);
+    case 'role': return roleCommand(message, rest, db);
     default:
       return message.reply({ embeds: [embed('Vouch', 'Use `-vouch give`, `take`, `check`, `list`, or an authorized configuration command.')], allowedMentions: { parse: [] } });
   }

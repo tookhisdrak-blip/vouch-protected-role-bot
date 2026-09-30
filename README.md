@@ -39,14 +39,17 @@ Use `-vouchhelp` or `-vouchcommands` to open the interactive, permission-filtere
 ## Commands
 
 - `-vouch give @user [reason]`
-- `-vouch take @user [reason]`
+- `-vouch take @user [reason]` (original giver, Vouch Admin, OS, or Guild Owner)
+- `-vouch admin take @user [reason]` (Vouch Admin, OS, or Guild Owner; removes any vouch)
 - `-vouch check [@user]`
 - `-vouch list [page]`
-- `-vouch setrole @role` and `-vouch unsetrole`
+- `-vouch setrole @role` and `-vouch unsetrole` (aliases `-vouch role add @role` and `-vouch role remove`; OS or Guild Owner)
 - `-vouch setreward @role`
-- `-vouch addgiver @user` and `-vouch removegiver @user`
+- `-vouch addgiver @user` and `-vouch removegiver @user` (Vouch Admin, OS, or Guild Owner)
+- `-vouch admin allow @user` and `-vouch admin remove @user` (OS or Guild Owner)
+- `-vouch owner allow @user` and `-vouch owner remove @user` (actual Guild Owner only)
 - `-vouch limit [number]`, `-vouch limit @user [number]`, `-vouch limit remove @user`
-- `-vouch wipeall`
+- `-vouch wipeall` (alias `-vouch reset`; Guild Owner)
 - `-vouchblacklist add @user`, `-vouchblacklist remove @user`, `-vouchblacklist list [page]`
 - `-setrole os @role`, `-setrole os @user`, and `-setrole os remove @user|@role`
 - `-setrole stripstaff @role` (optional legacy setting; STRIPSTAFF runs automatically without it)
@@ -63,13 +66,21 @@ Use `-vouchhelp` or `-vouchcommands` to open the interactive, permission-filtere
 - `-forcestrip @user @role`, `-forcestrip @role-name/id`, and `-unforcestrip @user` (aliases)
 - `-foreverban @user [reason]`, `-unforeverban @user`, and `-foreverbanlist [page]` (Guild Owner only)
 
-The Guild Owner controls configuration and is always exempt from STRIPSTAFF. OS users and the configured OS role can administer vouches and the blacklist, but cannot change owner-controlled configuration. Only the original giver, OS, or Guild Owner can remove an active vouch.
+Permission levels are separate:
 
-Force Management is available to existing OS users/roles, the Guild Owner, and explicitly configured Founder account IDs in `FORCE_FOUNDER_IDS` (comma, space, or semicolon separated). Founder IDs do not grant forever-ban access; those commands always check the actual Guild Owner. Forever-ban records match exact Discord account IDs only. They do not identify alternate accounts belonging to the same person; future explicit account associations or verification signals would require separate owner-configured rules.
+- Vouch Giver: 2 vouches by default; can give vouches and take back only the vouches they gave.
+- Vouch Admin: 5 vouches by default; can give vouches, add/remove Vouch Givers, and remove any vouch. Not exempt from STRIPSTAFF.
+- OS: Vouch Admin powers (5 vouches by default), plus the vouch role, Vouch Admins, and the blacklist. Exempt from STRIPSTAFF. Cannot grant Owner Allow or change owner-controlled configuration.
+- Guild Owner: full control; uncapped vouches unless a custom limit is set; exempt from STRIPSTAFF.
+- Owner Allow: treated exactly like the Guild Owner for this bot (including Forever Bans), except that only the actual Discord Guild Owner can grant or remove Owner Allow.
+
+The Guild Owner can change any giver, Vouch Admin, or OS allowance with `-vouch limit @user [number]`; `-vouch limit remove @user` restores that level's default. Vouch permissions never affect the limited-role system.
+
+Force Management is available to existing OS users/roles, the Guild Owner, and explicitly configured Founder account IDs in `FORCE_FOUNDER_IDS` (comma, space, or semicolon separated). Founder IDs do not grant forever-ban access; those commands require the Guild Owner or an Owner Allow user. Forever-ban records match exact Discord account IDs only. They do not identify alternate accounts belonging to the same person; future explicit account associations or verification signals would require separate owner-configured rules.
 
 ## Role Monitoring
 
-`guildMemberUpdate` monitors role additions from this bot, the Discord role UI, and other bots. Executor attribution and STRIPSTAFF enforcement require the View Audit Log permission and a fresh matching role-add audit entry. Missing or stale audit entries are logged without punishment. Startup reconciliation removes invalid vouch roles. Limited-role reconciliation removes only excess members with a verifiable, most-recent role-add audit entry; if the executor/member cannot be safely identified, it leaves the excess assignment in place and reports it rather than removing an arbitrary existing member. STRIPSTAFF is an automatic punishment (no configured role required) that removes only roles whose Discord permissions include staff/moderation permissions; cosmetic, booster, reward, vouch, and ordinary roles are retained. Only the Guild Owner and OS are exempt from STRIPSTAFF (bots are also not punished); their invalid role assignments are still reversed. If a member with an active vouch has the vouch role manually removed, the bot restores it; only `-vouch take` (original giver, OS, or Guild Owner) or `-vouch wipeall` ends a vouch and removes the role.
+`guildMemberUpdate` monitors role additions from this bot, the Discord role UI, and other bots. Executor attribution and STRIPSTAFF enforcement require the View Audit Log permission and a fresh matching role-add audit entry. Missing or stale audit entries are logged without punishment. Startup reconciliation removes invalid vouch roles. Limited-role reconciliation removes only excess members with a verifiable, most-recent role-add audit entry; if the executor/member cannot be safely identified, it leaves the excess assignment in place and reports it rather than removing an arbitrary existing member. STRIPSTAFF is an automatic punishment (no configured role required) that removes only roles whose Discord permissions include staff/moderation permissions; cosmetic, booster, reward, vouch, and ordinary roles are retained. Only the Guild Owner, Owner Allow users, and OS are exempt from STRIPSTAFF (bots are also not punished); their invalid role assignments are still reversed. If a member with an active vouch has the vouch role manually removed, the bot restores it; only `-vouch take` (original giver, Vouch Admin, OS, or Guild Owner), `-vouch admin take`, or `-vouch wipeall`/`-vouch reset` ends a vouch and removes the role.
 
 Vouch-role requirements and limited-role member counts are independent settings. The same Discord role may have both configurations; either rule can independently reverse an invalid assignment.
 

@@ -7,7 +7,7 @@ const {
   StringSelectMenuBuilder
 } = require('discord.js');
 const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
-const { isForceManager, isGuildOwner } = require('../services/permissions');
+const { isForceManager, hasOwnerAccess } = require('../services/permissions');
 const { logForceEvent } = require('../services/forceLogger');
 const {
   setForcedNickname,
@@ -29,10 +29,6 @@ const panelCategories = [
   ['help', 'Force Management Help']
 ];
 const pendingGlobalStrips = new Map();
-
-function ownerOnly(message) {
-  return isGuildOwner(message.member);
-}
 
 function denial(message, ownerRequired = false) {
   return message.reply({
@@ -140,7 +136,7 @@ function panelPayload(guild, category, page, db, owner) {
 async function forceManage(message, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const guild = message.guild;
-  const owner = isGuildOwner(message.member);
+  const owner = hasOwnerAccess(message.member, db);
   try {
     await message.author.send(panelPayload(guild, 'active', 1, db, owner));
     return message.reply({ embeds: [success('The permission-filtered Force Management panel was sent to your direct messages.')], allowedMentions: { parse: [] } });
@@ -234,7 +230,7 @@ async function globalRoleStrip(message, roleInput, db) {
 }
 
 async function foreverBan(message, args, db) {
-  if (!isGuildOwner(message.member)) return denial(message, true);
+  if (!hasOwnerAccess(message.member, db)) return denial(message, true);
   const userId = userIdFrom(args[0]);
   if (!userId) return message.reply({ embeds: [failure('Use `-foreverban @user [reason]`.')], allowedMentions: { parse: [] } });
   const targetMember = await message.guild.members.fetch(userId).catch(() => null);
@@ -248,7 +244,7 @@ async function foreverBan(message, args, db) {
 }
 
 async function unForeverBan(message, args, db) {
-  if (!isGuildOwner(message.member)) return denial(message, true);
+  if (!hasOwnerAccess(message.member, db)) return denial(message, true);
   const userId = userIdFrom(args[0]);
   if (!userId) return message.reply({ embeds: [failure('Use `-unforeverban @user`.')], allowedMentions: { parse: [] } });
   const result = await removeForeverBan(message.guild, userId, message.author.id, db);
@@ -257,7 +253,7 @@ async function unForeverBan(message, args, db) {
 }
 
 async function foreverBanList(message, args, db) {
-  if (!isGuildOwner(message.member)) return denial(message, true);
+  if (!hasOwnerAccess(message.member, db)) return denial(message, true);
   const page = Number(args[0] || 1);
   if (!Number.isSafeInteger(page) || page < 1) return message.reply({ embeds: [failure('Page must be a positive whole number.')], allowedMentions: { parse: [] } });
   const records = db.getForeverBans(message.guild.id);
@@ -332,7 +328,7 @@ async function handleInteraction(interaction, db) {
       await interaction.update({ embeds: [failure('You are no longer authorized to view this panel.')], components: [], allowedMentions: { parse: [] } });
       return true;
     }
-    const owner = isGuildOwner(member);
+    const owner = hasOwnerAccess(member, db);
     let category = 'active';
     let page = 1;
     if (action === 'force-panel-category') category = interaction.values[0];
