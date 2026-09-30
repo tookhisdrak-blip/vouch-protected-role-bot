@@ -1,0 +1,19 @@
+{
+  "name": "vouch-protected-role-bot",
+  "version": "1.0.0",
+  "description": "Discord Vouch and Protected Role moderation bot",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "discord.js": "^14.21.0",
+    "dotenv": "^16.6.1"
+  }
+}

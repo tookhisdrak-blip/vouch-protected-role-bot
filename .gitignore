@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Secrets - never commit real environment files
+.env
+.env.*
+!.env.example
+
+# Local database and all SQLite files (production data lives on the Railway Volume)
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
+*.db-shm
+*.db-wal
+*.db-journal
+*-shm
+*-wal
+
+# Logs and OS/editor files
+logs/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
