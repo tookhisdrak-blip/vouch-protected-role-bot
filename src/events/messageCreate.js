@@ -4,6 +4,7 @@ const help = require('../commands/help');
 const admin = require('../commands/admin');
 const forceManagement = require('../commands/forceManagement');
 const vouchCommands = require('../commands/vouchCommands');
+const fakePermissions = require('../commands/fakePermissions');
 
 const handlers = new Map([
   ['vouch', (message, args, db) => vouch.execute(message, args, db)],
@@ -24,7 +25,8 @@ const handlers = new Map([
   ['unforcestrip', (message, args, db) => forceManagement.execute(message, ['unforcestrip', ...args], db)],
   ['foreverban', (message, args, db) => forceManagement.execute(message, ['foreverban', ...args], db)],
   ['unforeverban', (message, args, db) => forceManagement.execute(message, ['unforeverban', ...args], db)],
-  ['foreverbanlist', (message, args, db) => forceManagement.execute(message, ['foreverbanlist', ...args], db)]
+  ['foreverbanlist', (message, args, db) => forceManagement.execute(message, ['foreverbanlist', ...args], db)],
+  ['fp', (message, args, db) => fakePermissions.execute(message, args, db)]
 ]);
 
 async function handleMessageCreate(message, client, db, prefix) {

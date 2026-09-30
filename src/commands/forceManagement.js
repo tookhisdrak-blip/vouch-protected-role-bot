@@ -7,7 +7,8 @@ const {
   StringSelectMenuBuilder
 } = require('discord.js');
 const { COLORS, embed, success, failure, mentionRole, mentionUser } = require('../utils/embeds');
-const { isForceManager, hasOwnerAccess } = require('../services/permissions');
+const { isForceManager } = require('../services/permissions');
+const { hasFakePermission } = require('../services/fakePermissions');
 const { logForceEvent } = require('../services/forceLogger');
 const {
   setForcedNickname,
@@ -32,7 +33,7 @@ const pendingGlobalStrips = new Map();
 
 function denial(message, ownerRequired = false) {
   return message.reply({
-    embeds: [failure(ownerRequired ? 'Only the Guild Owner can use forever-ban commands.' : 'Only OS or the Guild Owner can use Force Management commands.')],
+    embeds: [failure(ownerRequired ? 'You need the fake `ban_members` permission to use forever-ban commands. OS and the Guild Owner have it automatically.' : 'Only OS or the Guild Owner can use Force Management commands.')],
     allowedMentions: { parse: [] }
   });
 }
@@ -136,7 +137,7 @@ function panelPayload(guild, category, page, db, owner) {
 async function forceManage(message, db) {
   if (!isForceManager(message.member, db)) return denial(message);
   const guild = message.guild;
-  const owner = hasOwnerAccess(message.member, db);
+  const owner = hasFakePermission(message.member, db, 'ban_members');
   try {
     await message.author.send(panelPayload(guild, 'active', 1, db, owner));
     return message.reply({ embeds: [success('The permission-filtered Force Management panel was sent to your direct messages.')], allowedMentions: { parse: [] } });
@@ -230,7 +231,7 @@ async function globalRoleStrip(message, roleInput, db) {
 }
 
 async function foreverBan(message, args, db) {
-  if (!hasOwnerAccess(message.member, db)) return denial(message, true);
+  if (!hasFakePermission(message.member, db, 'ban_members')) return denial(message, true);
   const userId = userIdFrom(args[0]);
   if (!userId) return message.reply({ embeds: [failure('Use `-foreverban @user [reason]`.')], allowedMentions: { parse: [] } });
   const targetMember = await message.guild.members.fetch(userId).catch(() => null);
@@ -244,7 +245,7 @@ async function foreverBan(message, args, db) {
 }
 
 async function unForeverBan(message, args, db) {
-  if (!hasOwnerAccess(message.member, db)) return denial(message, true);
+  if (!hasFakePermission(message.member, db, 'ban_members')) return denial(message, true);
   const userId = userIdFrom(args[0]);
   if (!userId) return message.reply({ embeds: [failure('Use `-unforeverban @user`.')], allowedMentions: { parse: [] } });
   const result = await removeForeverBan(message.guild, userId, message.author.id, db);
@@ -253,7 +254,7 @@ async function unForeverBan(message, args, db) {
 }
 
 async function foreverBanList(message, args, db) {
-  if (!hasOwnerAccess(message.member, db)) return denial(message, true);
+  if (!hasFakePermission(message.member, db, 'ban_members')) return denial(message, true);
   const page = Number(args[0] || 1);
   if (!Number.isSafeInteger(page) || page < 1) return message.reply({ embeds: [failure('Page must be a positive whole number.')], allowedMentions: { parse: [] } });
   const records = db.getForeverBans(message.guild.id);
@@ -315,7 +316,7 @@ async function handleInteraction(interaction, db) {
     await interaction.deferUpdate();
     const result = await runGlobalRoleStrip(guild, role, interaction.user.id, db);
     const output = result.ok
-      ? embed(result.failed ? 'Global role strip incomplete' : 'Global role strip complete', `Members found: ${result.found}\nSuccessfully stripped: ${result.stripped}\nFailed removals: ${result.failed}\nMembers skipped: ${result.skipped}`, result.failed ? COLORS.error : COLORS.success)
+      ? embed(result.failed ? 'Global role strip incomplete' : 'Global role strip complete', `Members found: ${result.found}\nSuccessfully stripped: ${result.stripped}\nFailed removals: ${result.failed}\nMembers skipped: ${result.skipped}${result.queued ? `\nQueued after Discord rate limit: ${result.queued}` : ''}`, result.failed ? COLORS.error : COLORS.success)
       : failure(result.busy ? 'A global strip for that role is already running.' : result.protected ? 'That role is protected and cannot be globally stripped.' : 'The operation was incomplete. No success is claimed.');
     await interaction.message.edit({ embeds: [output], components: [], allowedMentions: { parse: [] } });
     return true;
@@ -328,7 +329,7 @@ async function handleInteraction(interaction, db) {
       await interaction.update({ embeds: [failure('You are no longer authorized to view this panel.')], components: [], allowedMentions: { parse: [] } });
       return true;
     }
-    const owner = hasOwnerAccess(member, db);
+    const owner = hasFakePermission(member, db, 'ban_members');
     let category = 'active';
     let page = 1;
     if (action === 'force-panel-category') category = interaction.values[0];

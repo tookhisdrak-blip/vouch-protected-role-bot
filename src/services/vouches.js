@@ -1,6 +1,7 @@
 const { canGiveVouch, hasVouchAdminAccess, remainingVouches } = require('./permissions');
 const { logEvent } = require('./eventLogger');
-const { applyStripstaff, removeRoleDetailed } = require('./roleProtection');
+const { applyStripstaff, removeRoleDetailed, stripstaffPunishmentText } = require('./roleProtection');
+const { withDiscordRetry, scheduleDeferredRetry } = require('./discordRetry');
 
 const pendingRoleAssignments = new Map();
 const LIMIT_MESSAGE = 'you ran out of vouches bud, remove your vouch from a user or keep it how u got it.';
@@ -36,11 +37,7 @@ async function giveVouch(giver, recipient, reason, db) {
         role_id: db.getSettings(guildId).stripstaff_role_id,
         reason: 'The giver attempted to exceed their active vouch allowance',
         action_taken: 'Vouch rejected; no active vouch or configured roles were assigned',
-        punishment: punishment.status === 'removed' ? 'STRIPSTAFF removed'
-          : punishment.status === 'failed' ? 'STRIPSTAFF removal failed; check Manage Roles and role hierarchy'
-            : punishment.status === 'partial' ? `STRIPSTAFF partially removed (${punishment.removed} role(s) removed; ${punishment.failed} failed)`
-            : punishment.status === 'exempt' ? 'None (exempt)'
-              : 'None (no staff-permission roles held)'
+        punishment: stripstaffPunishmentText(punishment)
       });
       return { ok: false, message: LIMIT_MESSAGE };
     }
@@ -69,11 +66,26 @@ async function giveVouch(giver, recipient, reason, db) {
 
     const createdAt = new Date().toISOString();
     const rolesToAssign = roleIds.filter((roleId) => !recipient.roles.cache.has(roleId));
+    const deferredRoleIds = [];
     let vouchPersisted = false;
     try {
       db.addVouch(guildId, recipient.id, giver.id, reason || 'No reason provided', createdAt);
       vouchPersisted = true;
-      for (const roleId of rolesToAssign) await recipient.roles.add(roleId, 'Active vouch');
+      for (const roleId of rolesToAssign) {
+        if (deferredRoleIds.length) {
+          deferredRoleIds.push(roleId);
+          continue;
+        }
+        try {
+          await withDiscordRetry(() => recipient.roles.add(roleId, 'Active vouch'), {
+            label: `Assigning vouch role ${roleId} to ${recipient.id}`
+          });
+        } catch (error) {
+          // A rate limit is not a failed vouch: keep the record and finish the assignment later.
+          if (!error.transient) throw error;
+          deferredRoleIds.push(roleId);
+        }
+      }
     } catch (error) {
       const rollbackFailures = [];
       if (vouchPersisted) {
@@ -85,7 +97,9 @@ async function giveVouch(giver, recipient, reason, db) {
         }
       }
       for (const roleId of rolesToAssign) {
-        const removal = await removeRoleDetailed(recipient, roleId, 'Vouch assignment rolled back');
+        const removal = await removeRoleDetailed(recipient, roleId, 'Vouch assignment rolled back', {
+          isStillRequired: () => !db.getVouch(guildId, recipient.id)
+        });
         if (removal.status === 'failed' || removal.status === 'busy') rollbackFailures.push(`role ${roleId}`);
       }
       console.error(`Vouch assignment failed for ${guildId}:${recipient.id}:`, error.message);
@@ -98,25 +112,45 @@ async function giveVouch(giver, recipient, reason, db) {
       };
     }
 
+    for (const roleId of deferredRoleIds) {
+      const reservationKey = `${guildId}:${roleId}`;
+      // Keep any limited-role slot reserved until the deferred assignment settles.
+      const keepsReservation = reservedRoleIds.includes(roleId);
+      if (keepsReservation) reservedRoleIds = reservedRoleIds.filter((reserved) => reserved !== roleId);
+      const scheduled = scheduleDeferredRetry(`add:${guildId}:${recipient.id}:${roleId}`, () => recipient.roles.add(roleId, 'Active vouch'), {
+        label: `Assigning vouch role ${roleId} to ${recipient.id}`,
+        isStillRequired: () => Boolean(db.getVouch(guildId, recipient.id))
+          && !recipient.roles.cache.has(roleId)
+          && configuredVouchRoles(guildId, db).includes(roleId),
+        onSettled: () => {
+          if (keepsReservation) releaseReservation(reservationKey);
+        }
+      });
+      if (!scheduled && keepsReservation) releaseReservation(reservationKey);
+    }
+
     await logEvent(giver.guild, db, {
       event_type: 'VOUCH GIVEN',
       executor_id: giver.id,
       affected_user_id: recipient.id,
       role_id: db.getSettings(guildId).vouch_role_id,
       reason: reason || 'No reason provided',
-      action_taken: 'Vouch recorded; configured roles assigned',
+      action_taken: deferredRoleIds.length
+        ? `Vouch recorded; ${deferredRoleIds.length} configured role(s) rate limited by Discord and queued for automatic assignment`
+        : 'Vouch recorded; configured roles assigned',
       punishment: null,
       created_at: createdAt
     });
-    return { ok: true, createdAt, remaining: remainingVouches(guildId, giver.id, db, giver) };
+    return { ok: true, createdAt, remaining: remainingVouches(guildId, giver.id, db, giver), deferredRoleIds };
   } finally {
-    for (const roleId of reservedRoleIds) {
-      const key = `${guildId}:${roleId}`;
-      const remaining = (pendingRoleAssignments.get(key) || 1) - 1;
-      if (remaining > 0) pendingRoleAssignments.set(key, remaining);
-      else pendingRoleAssignments.delete(key);
-    }
+    for (const roleId of reservedRoleIds) releaseReservation(`${guildId}:${roleId}`);
   }
+}
+
+function releaseReservation(key) {
+  const remaining = (pendingRoleAssignments.get(key) || 1) - 1;
+  if (remaining > 0) pendingRoleAssignments.set(key, remaining);
+  else pendingRoleAssignments.delete(key);
 }
 
 async function takeVouch(actor, recipient, reason, db) {
@@ -130,7 +164,9 @@ async function takeVouch(actor, recipient, reason, db) {
   db.removeVouch(guildId, recipient.id);
   const cleanupFailures = [];
   for (const roleId of configuredVouchRoles(guildId, db)) {
-    const result = await removeRoleDetailed(recipient, roleId, reason || 'Active vouch removed');
+    const result = await removeRoleDetailed(recipient, roleId, reason || 'Active vouch removed', {
+      isStillRequired: () => !db.getVouch(guildId, recipient.id)
+    });
     if (result.status === 'failed' || result.status === 'busy') cleanupFailures.push(roleId);
   }
   const removedAt = new Date().toISOString();
@@ -162,7 +198,9 @@ async function wipeVouches(guild, db, actorId) {
     });
     if (!member) continue;
     for (const roleId of roleIds) {
-      const result = await removeRoleDetailed(member, roleId, 'All active vouches wiped');
+      const result = await removeRoleDetailed(member, roleId, 'All active vouches wiped', {
+        isStillRequired: () => !db.getVouch(guild.id, member.id)
+      });
       if (result.status === 'failed' || result.status === 'busy') cleanupFailures.push({ memberId: member.id, roleId });
     }
   }

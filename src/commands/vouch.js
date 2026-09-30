@@ -22,7 +22,10 @@ async function give(message, args, db) {
   const result = await giveVouch(message.member, recipient, args.slice(1).join(' ').trim(), db);
   if (!result.ok) return message.reply({ embeds: [failure(result.message, 'Vouch not given')], allowedMentions: { parse: [] } });
   const balance = result.remaining === null ? '' : ` Remaining vouches: ${result.remaining}.`;
-  return message.reply({ embeds: [success(`${mentionUser(recipient.id)} received a vouch.${balance}`, 'Vouch recorded')], allowedMentions: { parse: [] } });
+  const queued = result.deferredRoleIds?.length
+    ? ' Discord is rate limiting role changes; the vouch role will be assigned automatically shortly.'
+    : '';
+  return message.reply({ embeds: [success(`${mentionUser(recipient.id)} received a vouch.${balance}${queued}`, 'Vouch recorded')], allowedMentions: { parse: [] } });
 }
 
 async function take(message, args, db, usage = '-vouch take @user [reason]') {

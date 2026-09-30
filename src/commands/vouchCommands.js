@@ -11,6 +11,7 @@ const {
   isGuildOwner, isOwnerAllowed, hasOwnerAccess, isOs, isVouchAdmin, isFounder, isForceManager
 } = require('../services/permissions');
 const { catalog, allowed } = require('./help');
+const { hasFakePermission } = require('../services/fakePermissions');
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const PAGE_SIZE = 5;
@@ -25,11 +26,11 @@ const CATEGORIES = [
   { key: 'givers', label: 'Giver Management', title: 'Giver Management', description: 'Authorize givers and control how many people each giver can vouch for.', sources: ['Giver Management'] },
   { key: 'roles', label: 'Vouch & Reward Roles', title: 'Vouch & Reward Roles', description: 'Configure the protected vouch role and the automatic reward role.', sources: ['Vouch Roles', 'Reward Roles'] },
   { key: 'limited', label: 'Limited Roles', title: 'Limited Roles', description: 'Cap how many members can hold a role. Separate from vouch limits.', sources: ['Limited Roles'] },
-  { key: 'access', label: 'Access Levels', title: 'Access Levels', description: 'Grant or remove Vouch Admin and Owner Allow access.', sources: ['Access Levels'] },
+  { key: 'access', label: 'Access Levels', title: 'Access Levels', description: 'Grant or remove Vouch Admin, Owner Allow, and fake permissions.', sources: ['Access Levels', 'Fake Permissions'] },
   { key: 'blacklist', label: 'Blacklist', title: 'Vouch Blacklist', description: 'Block members from receiving vouches.', sources: ['Blacklist'] },
   { key: 'admin', label: 'Administration', title: 'Vouch Administration', description: 'STRIPSTAFF role, OS access, event logs, and full vouch resets.', sources: ['Vouch Administration'] },
   { key: 'force', label: 'Force Management', title: 'Force Management', description: 'Forced nicknames, member role strips, and global role strips.', sources: [...FORCE_CATEGORIES] },
-  { key: 'forever', label: 'Forever Bans', title: 'Forever Bans', description: 'Permanent account-ID ban records. Guild Owner only.', sources: ['Forever Bans'], ownerOnly: true },
+  { key: 'forever', label: 'Forever Bans', title: 'Forever Bans', description: 'Permanent account-ID ban records. Needs fake ban_members; OS and Guild Owner have it.', sources: ['Forever Bans'] },
   { key: 'all', label: 'All Commands', title: 'All Commands', description: 'Every command you can use, in category order.' },
   { key: 'permissions', label: 'Your Permissions', title: 'Your Permissions', description: 'What your current access allows.' }
 ];
@@ -75,7 +76,10 @@ const SHORT_DESCRIPTIONS = {
   '-rolestrip @role-name/id': 'Strip a role from everyone',
   '-foreverban @user [reason]': 'Forever-ban an account',
   '-unforeverban @user': 'Remove a forever-ban record',
-  '-foreverbanlist [page]': 'View forever-ban records'
+  '-foreverbanlist [page]': 'View forever-ban records',
+  '-fp add @user|@role ban_members': 'Grant a fake permission',
+  '-fp remove @user|@role ban_members': 'Remove a fake permission',
+  '-fp list': 'List fake permission holders'
 };
 
 function rootCommand(entry) {
@@ -89,7 +93,7 @@ function registeredCatalog() {
   const discovered = [...handlers.keys()].filter((root) => root !== 'vouchcommands' && !knownRoots.has(root));
   const fallbackEntries = discovered.map((root) => {
     if (/^(foreverban|unforeverban)/.test(root)) {
-      return { command: `-${root}`, summary: 'Registered command; detailed metadata is not yet configured.', category: 'Forever Bans', permission: 'owner' };
+      return { command: `-${root}`, summary: 'Registered command; detailed metadata is not yet configured.', category: 'Forever Bans', permission: 'fakeban' };
     }
     if (/^(force|unforce|rolestrip|forcemanage)/.test(root)) {
       return { command: `-${root}`, summary: 'Registered command; detailed metadata is not yet configured.', category: 'Force Management', permission: 'force' };
@@ -165,11 +169,12 @@ function permissionDescription(member, db) {
   else if (isOwnerAllowed(member, db)) access.push('Owner Allow: full Guild Owner access, except granting Owner Allow.');
   if (isOs(member, db)) access.push('OS: Vouch Admin powers, vouch role, Vouch Admins, and blacklist. 5 default vouches.');
   if (isVouchAdmin(member, db)) access.push('Vouch Admin: give vouches (5 default), manage givers, remove any vouch.');
-  if (isFounder(member)) access.push('Founder: Force Management commands only; no Forever Ban access.');
+  if (isFounder(member)) access.push('Founder: Force Management commands only.');
   if (db.getGiver(member.guild.id, member.id)) access.push('Vouch Giver: give vouches within your allowance; remove your own vouches.');
   if (isForceManager(member, db)) access.push('Force Management: forced nicknames and role-strip commands.');
   if (!access.length) access.push('Regular member: public vouch information and limited-role views.');
-  if (!hasOwnerAccess(member, db)) access.push('Forever Ban commands are Guild Owner-only.');
+  if (hasFakePermission(member, db, 'ban_members')) access.push('Fake ban_members: Forever Ban and Forever Unban.');
+  else access.push('Forever Ban commands need the fake ban_members permission.');
   return access.join('\n');
 }
 

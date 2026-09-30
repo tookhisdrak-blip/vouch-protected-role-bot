@@ -6,6 +6,7 @@ const { handleMemberUpdate } = require('./events/guildMemberUpdate');
 const { handleReady } = require('./events/ready');
 const { handleMemberAdd } = require('./events/guildMemberAdd');
 const { handleInteraction } = require('./events/interactionCreate');
+const { clearDeferredRetries } = require('./services/discordRetry');
 
 if (!config.token) {
   console.error('DISCORD_TOKEN is required. Copy .env.example to .env and set the bot token.');
@@ -25,7 +26,13 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
-  ]
+  ],
+  // Never reject on a 429: discord.js queues the request and waits for retry_after.
+  rest: { rejectOnRateLimit: null, retries: 3 }
+});
+
+client.rest.on('rateLimited', (info) => {
+  console.warn(`Discord rate limit on ${info.method} ${info.route}: waiting ${info.retryAfter}ms (global: ${info.global}, scope: ${info.scope})`);
 });
 
 client.once(Events.ClientReady, () => handleReady(client, db));
@@ -37,6 +44,7 @@ client.on(Events.InteractionCreate, (interaction) => handleInteraction(interacti
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    clearDeferredRetries();
     db.close();
     client.destroy();
     process.exit(0);

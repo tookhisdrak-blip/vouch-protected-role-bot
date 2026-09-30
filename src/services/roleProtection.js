@@ -1,6 +1,7 @@
 const { AuditLogEvent, PermissionFlagsBits } = require('discord.js');
 const { isOwnerOrOs } = require('./permissions');
 const { logEvent } = require('./eventLogger');
+const { withDiscordRetry, scheduleDeferredRetry, hasDeferredRetry } = require('./discordRetry');
 
 const removalQueue = new Set();
 const auditDelay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -33,7 +34,10 @@ function auditRoleWasAdded(entry, roleId) {
 async function findRoleExecutor(guild, targetId, roleId) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 8 });
+      const logs = await withDiscordRetry(
+        () => guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 8 }),
+        { label: `Reading audit logs in ${guild.id}` }
+      );
       const matches = logs.entries.filter((candidate) => candidate.targetId === targetId
         && Date.now() - candidate.createdTimestamp >= 0
         && Date.now() - candidate.createdTimestamp < 15000
@@ -49,15 +53,32 @@ async function findRoleExecutor(guild, targetId, roleId) {
   return { entry: null, error: null, ambiguous: false };
 }
 
-async function removeRoleDetailed(member, roleId, reason) {
+// Statuses: removed | absent | busy | failed (permanent, e.g. hierarchy) |
+// deferred (rate limited / temporary Discord failure; a background retry is scheduled).
+async function removeRoleDetailed(member, roleId, reason, options = {}) {
   const key = `${member.guild.id}:${member.id}:${roleId}`;
   if (removalQueue.has(key)) return { status: 'busy', error: null };
   if (!member.roles.cache.has(roleId)) return { status: 'absent', error: null };
+  if (hasDeferredRetry(`remove:${key}`)) return { status: 'deferred', error: null };
   removalQueue.add(key);
+  const label = `Removing role ${roleId} from ${member.id}`;
   try {
-    await member.roles.remove(roleId, reason);
+    await withDiscordRetry(() => member.roles.remove(roleId, reason), {
+      label,
+      shouldContinue: () => member.roles.cache.has(roleId)
+    });
     return { status: 'removed', error: null };
   } catch (error) {
+    if (error.transient) {
+      scheduleDeferredRetry(`remove:${key}`, () => member.roles.remove(roleId, reason), {
+        label,
+        initialDelayMs: error.retryAfterMs,
+        isStillRequired: async () => member.roles.cache.has(roleId)
+          && (options.isStillRequired ? Boolean(await options.isStillRequired()) : true)
+      });
+      console.warn(`${label} was rate limited or temporarily failed; automatic retry scheduled.`);
+      return { status: 'deferred', error };
+    }
     console.warn(`Could not remove role ${roleId} from ${member.id}:`, error.message);
     return { status: 'failed', error };
   } finally {
@@ -83,33 +104,54 @@ async function applyStripstaff(guild, db, executor) {
     .map((role) => role.id);
   if (!staffRoleIds.length) return { status: 'no-staff-roles' };
   const results = await Promise.all(staffRoleIds.map((roleId) =>
-    removeRoleDetailed(executorMember, roleId, 'Protected role enforcement')));
+    removeRoleDetailed(executorMember, roleId, 'Protected role enforcement', {
+      isStillRequired: () => !isOwnerOrOs(executorMember, db)
+    })));
   const removed = results.filter((result) => result.status === 'removed').length;
+  const pending = results.filter((result) => result.status === 'deferred').length;
   const failed = results.filter((result) => result.status === 'failed' || result.status === 'busy').length;
+  if (pending) return { status: 'pending', removed, pending, failed };
   if (removed && failed) return { status: 'partial', removed, failed };
   if (removed) return { status: 'removed', removed };
   return { status: 'failed', removed: 0, failed };
 }
 
+function stripstaffPunishmentText(punishment) {
+  switch (punishment.status) {
+    case 'removed': return 'STRIPSTAFF removed';
+    case 'pending': return `STRIPSTAFF in progress (${punishment.removed} role(s) removed; ${punishment.pending} queued for automatic retry after a Discord rate limit${punishment.failed ? `; ${punishment.failed} failed` : ''})`;
+    case 'failed': return 'STRIPSTAFF removal failed; check Manage Roles and role hierarchy';
+    case 'partial': return `STRIPSTAFF partially removed (${punishment.removed} role(s) removed; ${punishment.failed} failed)`;
+    case 'exempt': return 'None (exempt)';
+    case 'unverified': return 'None (executor unverified)';
+    case 'unavailable': return 'None (executor unavailable)';
+    default: return 'None (no staff-permission roles held)';
+  }
+}
+
+function removalActionText(status, doneText = 'Role removed') {
+  if (status === 'failed') return 'Role removal failed; check Manage Roles and role hierarchy';
+  if (status === 'deferred') return 'Role removal rate limited by Discord; automatic retry scheduled';
+  return doneText;
+}
+
+function limitStillExceeded(guild, roleId, db) {
+  const config = db.getLimitedRole(guild.id, roleId);
+  const role = guild.roles.cache.get(roleId);
+  return Boolean(config && role && role.members.size > config.member_limit);
+}
+
 async function enforceViolation(member, roleId, violation, db) {
-  const roleRemoval = await removeRoleDetailed(member, roleId, violation.reason);
+  const roleRemoval = await removeRoleDetailed(member, roleId, violation.reason, { isStillRequired: violation.isStillRequired });
   if (roleRemoval.status === 'absent' || roleRemoval.status === 'busy') return false;
 
   const auditResult = await findRoleExecutor(member.guild, member.id, roleId);
   const executor = auditResult.entry?.executor || null;
   const punishment = await applyStripstaff(member.guild, db, executor);
-  const roleRemovalFailed = roleRemoval.status === 'failed';
   const auditDetail = auditResult.error
     ? 'Audit log unavailable; executor could not be verified'
     : auditResult.ambiguous ? 'Audit attribution ambiguous; executor could not be verified'
       : !executor ? 'No fresh matching audit entry; executor could not be verified' : null;
-  const punishmentText = punishment.status === 'removed' ? 'STRIPSTAFF removed'
-    : punishment.status === 'failed' ? 'STRIPSTAFF removal failed; check Manage Roles and role hierarchy'
-      : punishment.status === 'partial' ? `STRIPSTAFF partially removed (${punishment.removed} role(s) removed; ${punishment.failed} failed)`
-      : punishment.status === 'exempt' ? 'None (exempt)'
-          : punishment.status === 'unverified' ? 'None (executor unverified)'
-          : punishment.status === 'unavailable' ? 'None (executor unavailable)'
-                : 'None (no staff-permission roles held)';
 
   await logEvent(member.guild, db, {
     event_type: violation.eventType,
@@ -117,8 +159,8 @@ async function enforceViolation(member, roleId, violation, db) {
     affected_user_id: member.id,
     role_id: roleId,
     reason: [violation.reason, auditDetail].filter(Boolean).join('; '),
-    action_taken: roleRemovalFailed ? 'Role removal failed; check Manage Roles and role hierarchy' : 'Role removed',
-    punishment: punishmentText
+    action_taken: removalActionText(roleRemoval.status),
+    punishment: stripstaffPunishmentText(punishment)
   });
   return true;
 }
@@ -140,7 +182,10 @@ function roleChangeForEntry(entry, roleId) {
 async function latestRoleAssignmentMembers(guild, roleId, members) {
   let logs;
   try {
-    logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 100 });
+    logs = await withDiscordRetry(
+      () => guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 100 }),
+      { label: `Reading role assignment history in ${guild.id}` }
+    );
   } catch (error) {
     console.warn(`Could not inspect role assignment history for ${roleId} in ${guild.id}:`, error.message);
     return { members: [], auditUnavailable: true };
@@ -192,8 +237,10 @@ async function reconcileLimitedRole(guild, db, roleId, reason = 'Limited role re
 
   const removed = [];
   for (const member of selectedMembers) {
-    const result = await removeRoleDetailed(member, roleId, reason);
-    if (result.status === 'removed') removed.push(member.id);
+    const result = await removeRoleDetailed(member, roleId, reason, {
+      isStillRequired: () => limitStillExceeded(guild, roleId, db)
+    });
+    if (result.status === 'removed' || result.status === 'deferred') removed.push(member.id);
   }
   const remainingExcess = Math.max(0, role.members.size - config.member_limit);
   if (remainingExcess > 0) {
@@ -208,7 +255,8 @@ async function enforceVouchRoleState(member, db) {
   if (!roleId || !member.roles.cache.has(roleId) || db.getVouch(member.guild.id, member.id)) return false;
   return enforceViolation(member, roleId, {
     eventType: 'VOUCH ROLE VIOLATION',
-    reason: 'No active vouch exists for this member'
+    reason: 'No active vouch exists for this member',
+    isStillRequired: () => !db.getVouch(member.guild.id, member.id)
   }, db);
 }
 
@@ -225,7 +273,9 @@ async function reconcileVouchRole(guild, db, reason = 'Vouch role reconciliation
   const cleanupFailures = [];
   for (const member of members.values()) {
     if (!member.roles.cache.has(roleId) || activeVouchRecipients.has(member.id)) continue;
-    const removal = await removeRoleDetailed(member, roleId, reason);
+    const removal = await removeRoleDetailed(member, roleId, reason, {
+      isStillRequired: () => !db.getVouch(guild.id, member.id)
+    });
     if (removal.status === 'failed' || removal.status === 'busy') cleanupFailures.push(member.id);
   }
   return { cleanupFailures, memberFetchFailed };
@@ -247,7 +297,8 @@ async function handleGuildMemberUpdate(oldMember, newMember, db) {
     if (limit !== undefined && newMember.guild.roles.cache.get(roleId)?.members.size > limit) {
       const handled = await enforceViolation(newMember, roleId, {
         eventType: 'ROLE LIMIT VIOLATION',
-        reason: `Member limit is ${limit}`
+        reason: `Member limit is ${limit}`,
+        isStillRequired: () => limitStillExceeded(newMember.guild, roleId, db)
       }, db);
       if (handled) handledRoleIds.add(roleId);
     }
@@ -259,23 +310,43 @@ async function handleGuildMemberUpdate(oldMember, newMember, db) {
 
 // The vouch record is the source of truth: removing the role manually does not end a vouch.
 // takeVouch/wipe delete the record before removing the role, so they are never reverted here.
-async function restoreRemovedVouchRole(oldMember, newMember, db) {
-  const guild = newMember.guild;
-  const roleId = db.getSettings(guild.id)?.vouch_role_id;
-  if (!roleId || !oldMember.roles.cache.has(roleId) || newMember.roles.cache.has(roleId)) return false;
-  if (!db.getVouch(guild.id, newMember.id)) return false;
+function vouchRoleRestoreAllowed(member, roleId, db) {
+  const guild = member.guild;
+  if (db.getSettings(guild.id)?.vouch_role_id !== roleId || member.roles.cache.has(roleId)) return false;
+  if (!db.getVouch(guild.id, member.id)) return false;
   const role = guild.roles.cache.get(roleId);
   if (!role) return false;
   // Force Management strips are explicit owner/OS decisions; never re-add a force-stripped role.
-  if (db.getGlobalRoleStrip(guild.id, roleId) || db.getForcedRoleStrip(guild.id, newMember.id, roleId)) return false;
+  if (db.getGlobalRoleStrip(guild.id, roleId) || db.getForcedRoleStrip(guild.id, member.id, roleId)) return false;
   const limit = db.getLimitedRole(guild.id, roleId);
   // Never fight the separate member-limit system: only restore when a slot is free.
-  if (limit && role.members.size >= limit.member_limit) return false;
+  return !(limit && role.members.size >= limit.member_limit);
+}
+
+async function restoreRemovedVouchRole(oldMember, newMember, db) {
+  const guild = newMember.guild;
+  const roleId = db.getSettings(guild.id)?.vouch_role_id;
+  if (!roleId || !oldMember.roles.cache.has(roleId)) return false;
+  if (!vouchRoleRestoreAllowed(newMember, roleId, db)) return false;
+  const reason = 'Active vouch still exists; use -vouch take to remove a vouch';
+  const label = `Restoring vouch role ${roleId} to ${newMember.id}`;
+  let actionTaken = 'Role restored; vouches can only be removed with -vouch take';
   try {
-    await newMember.roles.add(roleId, 'Active vouch still exists; use -vouch take to remove a vouch');
+    await withDiscordRetry(() => newMember.roles.add(roleId, reason), {
+      label,
+      shouldContinue: () => vouchRoleRestoreAllowed(newMember, roleId, db)
+    });
   } catch (error) {
-    console.warn(`Could not restore vouch role ${roleId} to ${newMember.id}:`, error.message);
-    return false;
+    if (!error.transient) {
+      console.warn(`Could not restore vouch role ${roleId} to ${newMember.id}:`, error.message);
+      return false;
+    }
+    scheduleDeferredRetry(`add:${guild.id}:${newMember.id}:${roleId}`, () => newMember.roles.add(roleId, reason), {
+      label,
+      initialDelayMs: error.retryAfterMs,
+      isStillRequired: () => vouchRoleRestoreAllowed(newMember, roleId, db)
+    });
+    actionTaken = 'Role restore rate limited by Discord; automatic retry scheduled';
   }
   await logEvent(guild, db, {
     event_type: 'VOUCH ROLE RESTORED',
@@ -283,7 +354,7 @@ async function restoreRemovedVouchRole(oldMember, newMember, db) {
     affected_user_id: newMember.id,
     role_id: roleId,
     reason: 'The vouch role was removed while the member still has an active vouch',
-    action_taken: 'Role restored; vouches can only be removed with -vouch take',
+    action_taken: actionTaken,
     punishment: null
   });
   return true;
@@ -299,7 +370,8 @@ async function handleGuildMemberAdd(member, db) {
     if (config && member.guild.roles.cache.get(roleId)?.members.size > config.member_limit) {
       await enforceViolation(member, roleId, {
         eventType: 'ROLE LIMIT VIOLATION',
-        reason: `Member limit is ${config.member_limit}`
+        reason: `Member limit is ${config.member_limit}`,
+        isStillRequired: () => limitStillExceeded(member.guild, roleId, db)
       }, db);
     }
   }
@@ -328,7 +400,9 @@ async function reconcileGuild(guild, db) {
   if (settings.vouch_role_id && existingRoleIds.has(settings.vouch_role_id)) {
     for (const member of members.values()) {
       if (member.roles.cache.has(settings.vouch_role_id) && !activeVouchRecipients.has(member.id)) {
-        await removeRoleOnce(member, settings.vouch_role_id, 'Startup reconciliation: no active vouch');
+        await removeRoleDetailed(member, settings.vouch_role_id, 'Startup reconciliation: no active vouch', {
+          isStillRequired: () => !db.getVouch(guild.id, member.id)
+        });
       }
     }
   }
@@ -350,5 +424,7 @@ module.exports = {
   removeRoleOnce,
   removeRoleDetailed,
   findRoleExecutor,
-  applyStripstaff
+  applyStripstaff,
+  stripstaffPunishmentText,
+  removalActionText
 };

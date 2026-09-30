@@ -1,5 +1,6 @@
 const { findRoleExecutor, removeRoleDetailed, applyStripstaff } = require('./roleProtection');
 const { logForceEvent } = require('./forceLogger');
+const { withDiscordRetry } = require('./discordRetry');
 
 const nicknameLocks = new Set();
 const roleStripLocks = new Set();
@@ -16,6 +17,10 @@ function roleRuleKey(guildId, userId, roleId) {
   return `${guildId}:${userId}:${roleId}`;
 }
 
+function forceStripStillActive(member, roleId, db) {
+  return Boolean(db.getForcedRoleStrip(member.guild.id, member.id, roleId) || db.getGlobalRoleStrip(member.guild.id, roleId));
+}
+
 async function applyNickname(member, rule, db, options = {}) {
   const currentNickname = member.nickname || '';
   const desiredNickname = rule.nickname || '';
@@ -26,7 +31,9 @@ async function applyNickname(member, rule, db, options = {}) {
   nicknameLocks.add(key);
   let result;
   try {
-    await member.setNickname(desiredNickname || null, options.reason || 'Forced nickname rule');
+    await withDiscordRetry(() => member.setNickname(desiredNickname || null, options.reason || 'Forced nickname rule'), {
+      label: `Applying forced nickname to ${member.id}`
+    });
     result = { status: 'applied' };
   } catch (error) {
     result = { status: 'failed', error };
@@ -101,10 +108,13 @@ async function createForcedRoleStrip(member, roleId, executorId, db) {
     executor_id: executorId,
     created_at: createdAt
   });
-  const removal = await removeRoleDetailed(member, roleId, 'Forced role-strip rule');
+  const removal = await removeRoleDetailed(member, roleId, 'Forced role-strip rule', {
+    isStillRequired: () => forceStripStillActive(member, roleId, db)
+  });
   const result = removal.status === 'removed' || removal.status === 'absent'
     ? (removal.status === 'removed' ? 'Rule created; role removed' : 'Rule created; member did not have the role')
-    : 'Rule created; immediate role removal failed';
+    : removal.status === 'deferred' ? 'Rule created; role removal rate limited by Discord, automatic retry scheduled'
+      : 'Rule created; immediate role removal failed';
   await logForceEvent(member.guild, db, {
     action: 'FORCED ROLE STRIP CREATED',
     target_user_id: member.id,
@@ -132,7 +142,9 @@ async function enforceForcedRoleAddition(member, roleId, db, options = {}) {
   if (roleStripLocks.has(key)) return { status: 'queued' };
   roleStripLocks.add(key);
   try {
-    const removal = await removeRoleDetailed(member, roleId, options.reason || 'Active force role-strip rule');
+    const removal = await removeRoleDetailed(member, roleId, options.reason || 'Active force role-strip rule', {
+      isStillRequired: () => forceStripStillActive(member, roleId, db)
+    });
     if (removal.status === 'absent' || removal.status === 'busy') return { status: removal.status };
 
     let attributionStatus = options.startup ? 'not checked during startup' : 'not checked';
@@ -166,8 +178,10 @@ async function enforceForcedRoleAddition(member, roleId, db, options = {}) {
     const failureReason = removal.error?.message || null;
     const removalResult = removal.status === 'failed'
       ? 'Forced role removal failed; check Manage Roles and role hierarchy'
-      : 'Forced role removed';
+      : removal.status === 'deferred' ? 'Forced role removal rate limited by Discord; automatic retry scheduled'
+        : 'Forced role removed';
     const punishmentResult = punishment.status === 'removed' ? '; STRIPSTAFF removed'
+      : punishment.status === 'pending' ? `; STRIPSTAFF in progress (${punishment.removed} role(s) removed; ${punishment.pending} queued after a Discord rate limit)`
       : punishment.status === 'failed' ? '; STRIPSTAFF removal failed'
         : punishment.status === 'partial' ? `; STRIPSTAFF partially removed (${punishment.removed} role(s) removed; ${punishment.failed} failed)`
         : punishment.status === 'exempt' ? '; no punishment (exempt)'
@@ -182,6 +196,7 @@ async function enforceForcedRoleAddition(member, roleId, db, options = {}) {
       executor_id: executor?.id || null,
       result: `${removalResult}${options.global ? '' : punishmentResult}`,
       punishment: options.global ? null : punishment.status === 'removed' ? 'STRIPSTAFF removed'
+        : punishment.status === 'pending' ? `STRIPSTAFF in progress (${punishment.removed} role(s) removed; ${punishment.pending} queued for automatic retry)`
         : punishment.status === 'partial' ? `STRIPSTAFF partially removed (${punishment.removed} role(s) removed; ${punishment.failed} failed)`
         : punishment.status === 'exempt' ? 'None (exempt)'
           : 'None (no verified applicable punishment)',
@@ -232,18 +247,22 @@ async function runGlobalRoleStrip(guild, role, executorId, db) {
     let stripped = 0;
     let failed = 0;
     let skipped = 0;
+    let queued = 0;
     for (const member of holders) {
       if (member.id === guild.ownerId || member.user.bot) {
         skipped += 1;
         continue;
       }
-      const result = await removeRoleDetailed(member, role.id, 'Confirmed global role strip');
+      const result = await removeRoleDetailed(member, role.id, 'Confirmed global role strip', {
+        isStillRequired: () => forceStripStillActive(member, role.id, db)
+      });
       if (result.status === 'removed') stripped += 1;
+      else if (result.status === 'deferred') queued += 1;
       else if (result.status === 'failed' || result.status === 'busy') failed += 1;
       else skipped += 1;
     }
 
-    const summary = `Members found: ${holders.length}; stripped: ${stripped}; failed: ${failed}; skipped: ${skipped}`;
+    const summary = `Members found: ${holders.length}; stripped: ${stripped}; failed: ${failed}; skipped: ${skipped}${queued ? `; queued after rate limit: ${queued}` : ''}`;
     await logForceEvent(guild, db, {
       action: 'GLOBAL ROLE STRIP COMPLETED',
       role_id: role.id,
@@ -251,7 +270,7 @@ async function runGlobalRoleStrip(guild, role, executorId, db) {
       result: summary,
       failure_reason: failed ? `${failed} member role removal(s) failed` : null
     });
-    return { ok: true, found: holders.length, stripped, failed, skipped };
+    return { ok: true, found: holders.length, stripped, failed, skipped, ...(queued ? { queued } : {}) };
   } catch (error) {
     await logForceEvent(guild, db, {
       action: 'GLOBAL ROLE STRIP INCOMPLETE',
@@ -299,7 +318,7 @@ async function banAccountOnce(guild, userId, reason) {
   if (foreverBanLocks.has(key)) return { status: 'already-processing' };
   foreverBanLocks.add(key);
   try {
-    await guild.members.ban(userId, { reason });
+    await withDiscordRetry(() => guild.members.ban(userId, { reason }), { label: `Forever-banning ${userId}` });
     return { status: 'banned' };
   } catch (error) {
     return { status: 'failed', error };
@@ -334,13 +353,16 @@ async function reconcileForceGuild(guild, db) {
     if (!member) continue;
     for (const roleId of roleIds) {
       if (!member.roles.cache.has(roleId)) continue;
-      const removal = await removeRoleDetailed(member, roleId, 'Force-rule startup reconciliation');
+      const removal = await removeRoleDetailed(member, roleId, 'Force-rule startup reconciliation', {
+        isStillRequired: () => forceStripStillActive(member, roleId, db)
+      });
       await logForceEvent(guild, db, {
         action: 'FORCE ROLE STARTUP RECONCILIATION',
         target_user_id: member.id,
         role_id: roleId,
         executor_id: null,
         result: removal.status === 'removed' ? 'Role removed; no punishment during startup'
+          : removal.status === 'deferred' ? 'Role removal rate limited by Discord; automatic retry scheduled'
           : 'Role removal failed during startup; no punishment applied',
         failure_reason: removal.error?.message || null,
         attribution_status: 'not checked during startup'

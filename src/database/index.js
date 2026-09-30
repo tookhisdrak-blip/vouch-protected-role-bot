@@ -137,6 +137,15 @@ function createDatabase(databasePath) {
       attribution_status TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS fake_permissions (
+      guild_id TEXT NOT NULL,
+      target_type TEXT NOT NULL CHECK (target_type IN ('user', 'role')),
+      target_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      added_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, target_type, target_id, permission)
+    );
     CREATE INDEX IF NOT EXISTS forced_role_strips_target
       ON forced_role_strips (guild_id, user_id);
     CREATE INDEX IF NOT EXISTS forever_bans_user
@@ -251,6 +260,13 @@ function createDatabase(databasePath) {
     getForeverBan: connection.prepare("SELECT * FROM forever_bans WHERE guild_id = ? AND user_id = ? AND rule_status = 'active'"),
     getForeverBans: connection.prepare("SELECT * FROM forever_bans WHERE guild_id = ? AND rule_status = 'active' ORDER BY created_at, user_id"),
     removeForeverBan: connection.prepare('DELETE FROM forever_bans WHERE guild_id = ? AND user_id = ?'),
+    addFakePermission: connection.prepare(`
+      INSERT OR IGNORE INTO fake_permissions (guild_id, target_type, target_id, permission, added_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `),
+    removeFakePermission: connection.prepare('DELETE FROM fake_permissions WHERE guild_id = ? AND target_type = ? AND target_id = ? AND permission = ?'),
+    getFakePermissions: connection.prepare('SELECT * FROM fake_permissions WHERE guild_id = ? ORDER BY permission, target_type, created_at, target_id'),
+    getFakePermissionGrants: connection.prepare('SELECT target_type, target_id FROM fake_permissions WHERE guild_id = ? AND permission = ?'),
     addForceManagementLog: connection.prepare(`
       INSERT INTO force_management_logs
         (guild_id, action, target_user_id, role_id, nickname, executor_id, result, reason, punishment, failure_reason, attribution_status, created_at)
@@ -323,6 +339,12 @@ function createDatabase(databasePath) {
     getForeverBan: (guildId, userId) => statements.getForeverBan.get(guildId, userId),
     getForeverBans: (guildId) => statements.getForeverBans.all(guildId),
     removeForeverBan: (guildId, userId) => statements.removeForeverBan.run(guildId, userId),
+    addFakePermission: (guildId, targetType, targetId, permission, addedBy, createdAt = new Date().toISOString()) =>
+      statements.addFakePermission.run(guildId, targetType, targetId, permission, addedBy, createdAt),
+    removeFakePermission: (guildId, targetType, targetId, permission) =>
+      statements.removeFakePermission.run(guildId, targetType, targetId, permission),
+    getFakePermissions: (guildId) => statements.getFakePermissions.all(guildId),
+    getFakePermissionGrants: (guildId, permission) => statements.getFakePermissionGrants.all(guildId, permission),
     addForceManagementLog: (entry) => statements.addForceManagementLog.run(entry),
     close: () => connection.close()
   };

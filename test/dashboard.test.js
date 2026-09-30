@@ -289,11 +289,15 @@ test('Force Management lists registered commands and renders alias information w
   }
 });
 
-test('Forever Bans is visible and renderable only for the actual Guild Owner', async (t) => {
+test('Forever Bans is visible and renderable only for fake ban_members holders (Guild Owner automatically)', async (t) => {
   const { db, guild, addMember } = createFixture('forever-dashboard');
   t.after(() => db.close());
   const owner = addMember(guild.ownerId);
   const founder = addMember('forever-founder');
+  const holder = addMember('forever-holder');
+  db.addFakePermission(guild.id, 'user', holder.id, 'ban_members', owner.id);
+  assert.ok(dashboard.categoriesFor(holder, db).includes('forever'));
+  assert.deepEqual(dashboard.getEntries('forever', holder, db).map((entry) => entry.command), ['-foreverban @user [reason]', '-unforeverban @user', '-foreverbanlist [page]']);
   const prior = process.env.FORCE_FOUNDER_IDS;
   process.env.FORCE_FOUNDER_IDS = founder.id;
   try {
@@ -359,7 +363,7 @@ test('Permissions category reports current access without exposing unauthorized 
   const { panel, client } = await openPanel(regular, guild, db);
   const selected = await selectCategory(regular.user, guild, client, panel, 'permissions', db);
   assert.match(selected.payload.embeds[0].data.description, /Regular member/);
-  assert.match(selected.payload.embeds[0].data.description, /Guild Owner-only/);
+  assert.match(selected.payload.embeds[0].data.description, /need the fake ban_members permission/);
   assert.doesNotMatch(selected.payload.embeds[0].data.description, /-foreverban @user/);
 });
 

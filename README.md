@@ -64,7 +64,18 @@ Use `-vouchhelp` or `-vouchcommands` to open the interactive, permission-filtere
 - `-forcerolestrip @user @role` and `-unforcerolestrip @user` (OS and Guild Owner)
 - `-rolestrip @role-name/id` (OS and Guild Owner; requires button confirmation)
 - `-forcestrip @user @role`, `-forcestrip @role-name/id`, and `-unforcestrip @user` (aliases)
-- `-foreverban @user [reason]`, `-unforeverban @user`, and `-foreverbanlist [page]` (Guild Owner only)
+- `-foreverban @user [reason]`, `-unforeverban @user`, and `-foreverbanlist [page]` (fake `ban_members` permission; OS and Guild Owner have it automatically)
+- `-fp add @user/id or @role/id <permission>`, `-fp remove @user/id or @role/id <permission>`, and `-fp list` (OS and Guild Owner)
+
+### Fake permissions
+
+Fake permissions are internal bot permissions. They never change real Discord permissions. Grant one directly to a user, or to a role so every member holding that role receives it. OS, the Guild Owner and Owner Allow users automatically have every fake permission. Everyone else needs the permission, either directly or through a role. Real Discord permissions such as Ban Members or Administrator do not grant it, and neither does other bot access (Vouch Admin, Founder, and so on).
+
+| Fake permission | Allows |
+| --- | --- |
+| `ban_members` | `-foreverban`, `-unforeverban`, `-foreverbanlist` |
+
+To add more fake permissions, extend `FAKE_PERMISSIONS` in `src/services/fakePermissions.js` and gate commands with `hasFakePermission(member, db, '<name>')`.
 
 Permission levels are separate:
 
@@ -76,7 +87,7 @@ Permission levels are separate:
 
 The Guild Owner can change any giver, Vouch Admin, or OS allowance with `-vouch limit @user [number]`; `-vouch limit remove @user` restores that level's default. Vouch permissions never affect the limited-role system.
 
-Force Management is available to existing OS users/roles, the Guild Owner, and explicitly configured Founder account IDs in `FORCE_FOUNDER_IDS` (comma, space, or semicolon separated). Founder IDs do not grant forever-ban access; those commands require the Guild Owner or an Owner Allow user. Forever-ban records match exact Discord account IDs only. They do not identify alternate accounts belonging to the same person; future explicit account associations or verification signals would require separate owner-configured rules.
+Force Management is available to existing OS users/roles, the Guild Owner, and explicitly configured Founder account IDs in `FORCE_FOUNDER_IDS` (comma, space, or semicolon separated). Founder IDs do not grant forever-ban access; those commands require the fake `ban_members` permission (automatic for OS, the Guild Owner and Owner Allow users). Forever-ban records match exact Discord account IDs only. They do not identify alternate accounts belonging to the same person; future explicit account associations or verification signals would require separate owner-configured rules.
 
 ## Role Monitoring
 
@@ -87,6 +98,10 @@ Vouch-role requirements and limited-role member counts are independent settings.
 The Server Members and Message Content privileged intents must be enabled for member monitoring and prefix commands. Prefix commands are also processed when a message is edited into a command. The bot's role must be higher than any protected or STRIPSTAFF role. Role limits are checked against the member cache maintained by the Server Members intent. The configured vouch role is reconciled at startup, when configured, when a member joins, and whenever a member role update is observed; members without an active vouch lose that role.
 
 New manual vouch givers use the current default allowance (2 by default). OS users receive five available vouches by default; the Guild Owner can set or remove a user-specific OS allowance with `-vouch limit @user number` and `-vouch limit remove @user`. A giver's custom limit overrides their default and is enforced against active vouches. Role-member limits remain an independent configuration and never change vouch allowances. An exhausted giver's attempt is rejected with the configured limit response; STRIPSTAFF punishment applies only to non-Owner/non-OS members.
+
+### Discord rate limits
+
+discord.js queues rate-limited (429) requests and waits for Discord's `retry_after` before sending them again. The bot never treats a rate limit or a temporary Discord failure (5xx, timeout, network reset) as a permanent failure. Enforcement actions retry inline while honoring `retry_after`. These actions are: vouch-role removal and restore, limited-role reversal, STRIPSTAFF, reward/vouch-role assignment and removal, force-management strips, and audit-log lookups. If Discord keeps rate limiting, the action is queued for an automatic background retry and logged as "automatic retry scheduled" instead of "failed". Before each retry the bot re-checks that the action is still required. For example, it will not remove a vouch role from someone who has since received a real vouch, and it will not assign a reward role after the vouch was taken. A rate limit during `-vouch give` keeps the vouch and assigns its roles automatically. Permanent errors such as Missing Permissions or role hierarchy problems still roll back and are reported as failures.
 
 ## Tests
 

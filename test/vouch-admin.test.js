@@ -318,7 +318,10 @@ test('help catalog lists the new access commands with permissions matching the c
     '-vouch role add @role': [owner, trusted, osUser],
     '-vouch role remove': [owner, trusted, osUser],
     '-vouch reset': [owner, trusted],
-    '-vouch addgiver @user': [owner, trusted, osUser, admin]
+    '-vouch addgiver @user': [owner, trusted, osUser, admin],
+    '-fp add @user|@role ban_members': [owner, trusted, osUser],
+    '-foreverban @user [reason]': [owner, trusted, osUser],
+    '-unforeverban @user': [owner, trusted, osUser]
   };
   for (const [command, permitted] of Object.entries(expectations)) {
     const entry = byCommand.get(command);
@@ -333,7 +336,8 @@ test('help catalog lists the new access commands with permissions matching the c
     lines.push(...dashboard.renderPage({ category: 'access', page, history: [], id: 'access' }, owner, db).data.description.split('\n'));
   }
   assert.deepEqual(lines.map((line) => line.split('`')[1]), [
-    '-vouch admin allow @user', '-vouch admin remove @user', '-vouch owner allow @user', '-vouch owner remove @user'
+    '-vouch admin allow @user', '-vouch admin remove @user',     '-vouch owner allow @user', '-vouch owner remove @user',
+    '-fp add @user|@role ban_members', '-fp remove @user|@role ban_members', '-fp list'
   ]);
   const rolesLines = dashboard.renderPage({ category: 'roles', page: 1, history: [], id: 'roles' }, osUser, db).data.description;
   assert.match(rolesLines, /`-vouch setrole @role` — .*\(alias `-vouch role add`\)/);

@@ -284,7 +284,7 @@ test('forced nicknames persist, restore after changes and rejoins, and stop afte
   assert.equal(db.getForcedNickname(guild.id, member.id), undefined);
 });
 
-test('OS can manage force rules, regular users cannot, and forever bans are Guild Owner-only', async (t) => {
+test('OS can manage force rules, regular users cannot, and forever bans need fake ban_members (OS/Owner automatic)', async (t) => {
   const { db, guild, addRole, addMember, bans } = createFixture('force-permissions');
   t.after(() => db.close());
   const owner = addMember('owner');
@@ -307,12 +307,14 @@ test('OS can manage force rules, regular users cannot, and forever bans are Guil
     };
   }
 
+  const banTarget = addMember('888888888888888888');
   const osMessage = await makeMessage(os);
   await forceCommands.execute(osMessage, ['forcenickname', `<@${target.id}>`, 'OS Nick'], db);
   assert.equal(db.getForcedNickname(guild.id, target.id).nickname, 'OS Nick');
-  await forceCommands.execute(osMessage, ['foreverban', `<@${target.id}>`, 'owner-only'], db);
-  assert.equal(db.getForeverBan(guild.id, target.id), undefined);
-  assert.match(osMessage.replies.at(-1).embeds[0].data.description, /Only the Guild Owner/);
+  await forceCommands.execute(osMessage, ['foreverban', `<@${banTarget.id}>`, 'os rule'], db);
+  assert.equal(db.getForeverBan(guild.id, banTarget.id).executor_id, os.id, 'OS has fake ban_members automatically');
+  await forceCommands.execute(osMessage, ['unforeverban', `<@${banTarget.id}>`], db);
+  assert.equal(db.getForeverBan(guild.id, banTarget.id), undefined);
 
   const previousFounderIds = process.env.FORCE_FOUNDER_IDS;
   process.env.FORCE_FOUNDER_IDS = founder.id;
@@ -322,7 +324,7 @@ test('OS can manage force rules, regular users cannot, and forever bans are Guil
     assert.equal(db.getForcedNickname(guild.id, target.id).nickname, 'Founder Nick');
     await forceCommands.execute(founderMessage, ['foreverban', `<@${target.id}>`, 'owner-only'], db);
     assert.equal(db.getForeverBan(guild.id, target.id), undefined);
-    assert.match(founderMessage.replies.at(-1).embeds[0].data.description, /Only the Guild Owner/);
+    assert.match(founderMessage.replies.at(-1).embeds[0].data.description, /fake `ban_members` permission/);
   } finally {
     if (previousFounderIds === undefined) delete process.env.FORCE_FOUNDER_IDS;
     else process.env.FORCE_FOUNDER_IDS = previousFounderIds;
@@ -340,8 +342,9 @@ test('OS can manage force rules, regular users cannot, and forever bans are Guil
   assert.equal(record.reason, 'permanent rule');
   assert.equal(record.original_ban_status, 'not_banned');
   assert.ok(bans.has(target.id));
-  await forceCommands.execute(osMessage, ['unforeverban', `<@${target.id}>`], db);
-  assert.ok(db.getForeverBan(guild.id, target.id));
+  await forceCommands.execute(regularMessage, ['unforeverban', `<@${target.id}>`], db);
+  assert.ok(db.getForeverBan(guild.id, target.id), 'members without fake ban_members cannot unforeverban');
+  assert.match(regularMessage.replies.at(-1).embeds[0].data.description, /fake `ban_members` permission/);
   await forceCommands.execute(ownerMessage, ['unforeverban', `<@${target.id}>`], db);
   assert.equal(db.getForeverBan(guild.id, target.id), undefined);
   assert.equal(db.getForeverBans(guild.id).length, 0);
@@ -704,7 +707,7 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
   assert.equal(db.getVouch(guild.id, commandTarget.id).reason, 'command reason');
   assert.equal(remainingVouches(guild.id, newGiver.id, db), 1);
   assert.deepEqual([...handlers.keys()].sort(), [
-    'forcemanage', 'forcenickname', 'forcerolestrip', 'forcestrip', 'foreverban', 'foreverbanlist',
+    'forcemanage', 'forcenickname', 'forcerolestrip', 'forcestrip', 'foreverban', 'foreverbanlist', 'fp',
     'limitedroles', 'rolestrip', 'setlimit', 'setlog', 'setrole', 'unforcenickname', 'unforcerolestrip',
     'unforcestrip', 'unforeverban', 'vouch', 'vouchblacklist', 'vouchcommands', 'vouchhelp'
   ]);
@@ -728,7 +731,8 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
   assert.match(osCommands, /-forcemanage/);
   assert.match(osCommands, /-vouch addgiver/);
   assert.doesNotMatch(osCommands, /-setrole os|-vouch owner allow|-vouch reset/);
-  assert.doesNotMatch(osCommands, /-foreverban/);
+  assert.match(osCommands, /-foreverban @user/, 'OS has fake ban_members automatically');
+  assert.doesNotMatch(commandsFor(regular), /-foreverban|-fp /);
 
   const ownerPageMessage = await mockMessage(owner);
   await helpCommand.execute(ownerPageMessage, ['2'], db);
@@ -760,7 +764,7 @@ test('owner and OS permission boundaries are enforced and help is paginated by p
     values: ['forever-bans'],
     async update(payload) { osBanPanel = payload; }
   }, db);
-  assert.doesNotMatch(osBanPanel.embeds[0].data.description, /panel-private-account|panel-only reason/);
+  assert.match(osBanPanel.embeds[0].data.description, /panel-private-account.*panel-only reason/);
 
   const ownerPanels = [];
   const ownerPanelMessage = await mockMessage(owner);

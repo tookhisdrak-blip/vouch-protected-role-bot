@@ -1,3 +1,4 @@
+const { hasFakePermission } = require('../services/fakePermissions');
 const { isGuildOwner, hasOwnerAccess, isOwnerOrOs, hasVouchAdminAccess, isVouchGiver, isForceManager } = require('../services/permissions');
 
 const catalog = [
@@ -34,6 +35,9 @@ const catalog = [
   { command: '-vouch admin remove @user', summary: 'Remove Vouch Admin access. Their existing vouches are kept.', category: 'Access Levels', permission: 'os' },
   { command: '-vouch owner allow @user', summary: 'Grant full Guild Owner-level bot access. Only the real Guild Owner can use this.', category: 'Access Levels', permission: 'realowner' },
   { command: '-vouch owner remove @user', summary: 'Remove Owner Allow access. Only the real Guild Owner can use this.', category: 'Access Levels', permission: 'realowner' },
+  { command: '-fp add @user|@role ban_members', summary: 'Grant an internal fake permission to a user or role (user/role ID also accepted). Discord permissions are not changed.', category: 'Fake Permissions', permission: 'os' },
+  { command: '-fp remove @user|@role ban_members', summary: 'Remove a fake permission from a user or role.', category: 'Fake Permissions', permission: 'os' },
+  { command: '-fp list', summary: 'List fake permission holders.', category: 'Fake Permissions', permission: 'os' },
   { command: '-vouchhelp [category|page]', summary: 'Open the paginated help dashboard with category pages and navigation buttons.', category: 'Vouch Information', permission: 'everyone' },
   { command: '-forcemanage', summary: 'Open the private Force Management panel.', category: 'Management', permission: 'force' },
   { command: '-forcenickname @user [nickname]', summary: 'Create and apply a persistent nickname rule.', category: 'Force Nicknames', permission: 'force' },
@@ -44,9 +48,9 @@ const catalog = [
   { command: '-forcestrip @user @role', summary: 'Alias for the member-specific role strip.', category: 'Force Role Strips', permission: 'force', aliasOf: '-forcerolestrip @user @role' },
   { command: '-forcestrip @role-name/id', summary: 'Alias for the global role strip.', category: 'Global Role Strips', permission: 'force', aliasOf: '-rolestrip @role-name/id' },
   { command: '-unforcestrip @user', summary: 'Alias for removing a member’s role-strip rules.', category: 'Force Role Strips', permission: 'force', aliasOf: '-unforcerolestrip @user' },
-  { command: '-foreverban @user [reason]', summary: 'Store and apply an account-ID forever-ban rule.', category: 'Forever Bans', permission: 'owner' },
-  { command: '-unforeverban @user', summary: 'Remove the record without changing current ban status.', category: 'Forever Bans', permission: 'owner' },
-  { command: '-foreverbanlist [page]', summary: 'Browse active forever-ban records.', category: 'Forever Bans', permission: 'owner' },
+  { command: '-foreverban @user [reason]', summary: 'Store and apply an account-ID forever-ban rule. Needs fake ban_members (OS and Guild Owner have it).', category: 'Forever Bans', permission: 'fakeban' },
+  { command: '-unforeverban @user', summary: 'Remove the record without changing current ban status.', category: 'Forever Bans', permission: 'fakeban' },
+  { command: '-foreverbanlist [page]', summary: 'Browse active forever-ban records.', category: 'Forever Bans', permission: 'fakeban' },
   { command: '-vouchcommands', summary: 'Open the public Vouch and Management command dashboard with category pages and navigation buttons.', category: 'Vouch Information', permission: 'everyone' }
 ];
 
@@ -55,6 +59,7 @@ function allowed(item, member, db) {
   if (item.permission === 'realowner') return isGuildOwner(member);
   if (item.permission === 'owner') return hasOwnerAccess(member, db);
   if (item.permission === 'os') return isOwnerOrOs(member, db);
+  if (item.permission === 'fakeban') return hasFakePermission(member, db, 'ban_members');
   if (item.permission === 'admin') return hasVouchAdminAccess(member, db);
   if (item.permission === 'force') return isForceManager(member, db);
   if (item.permission === 'giver') return hasVouchAdminAccess(member, db) || isVouchGiver(member, db);
